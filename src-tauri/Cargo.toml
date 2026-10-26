@@ -1,6 +1,6 @@
 [package]
 name = "rclone-mount-manager"
-version = "0.2.0"
+version = "0.2.1"
 description = "Cross-platform GUI to mount SMB / WebDAV / FTP / SFTP as local drives via rclone + WinFsp / macFUSE / FUSE"
 authors = ["rclone-mount-manager contributors"]
 edition = "2021"
