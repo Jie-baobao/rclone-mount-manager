@@ -680,6 +680,14 @@ pub fn rc_call(port: u16, endpoint: &str) -> Option<serde_json::Value> {
         .build()
         .ok()?;
     let url = format!("http://127.0.0.1:{port}/{endpoint}");
-    let resp = client.post(&url).send().ok()?.error_for_status().ok()?;
-    resp.json::<serde_json::Value>().ok()
+    // 手动解析：reqwest 的 json feature 没开，直接用 serde_json 读文本更省依赖
+    let body = client
+        .post(&url)
+        .send()
+        .ok()?
+        .error_for_status()
+        .ok()?
+        .text()
+        .ok()?;
+    serde_json::from_str::<serde_json::Value>(&body).ok()
 }
