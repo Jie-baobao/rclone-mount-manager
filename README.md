@@ -6,6 +6,11 @@
 > A cross-platform desktop GUI that mounts SMB / WebDAV / FTP / SFTP as local drives.
 > Powered by rclone + WinFsp / macFUSE / fuse3. No account, no sign-in, no ads, fully offline.
 
+[![build](https://github.com/Jie-baobao/rclone-mount-manager/actions/workflows/build.yml/badge.svg)](https://github.com/Jie-baobao/rclone-mount-manager/actions/workflows/build.yml)
+[![release](https://img.shields.io/github/v/release/Jie-baobao/rclone-mount-manager)](https://github.com/Jie-baobao/rclone-mount-manager/releases)
+[![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+![platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)
+
 ![主界面](docs/screenshots/main.png)
 
 ---
