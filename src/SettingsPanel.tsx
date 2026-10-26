@@ -217,22 +217,25 @@ export default function SettingsPanel({
             type="checkbox"
             checked={cfg.autostart ?? false}
             onChange={async (e) => {
+              // 必须在 await 之前取值：这个复选框是受控组件，await 期间 React 会把 DOM 的
+              // checked 刷回 false，等 setAutostart 返回后再读就永远是 false（表现为“勾不上”）。
+              const next = e.target.checked;
+              setCfg((c) => ({ ...c, autostart: next }));
               try {
-                await api.setAutostart(e.target.checked);
-                setCfg((c) => ({ ...c, autostart: e.target.checked }));
-                notify("ok", e.target.checked ? t("toast.autostartOn") : t("toast.autostartOff"));
+                await api.setAutostart(next);
+                notify("ok", next ? t("toast.autostartOn") : t("toast.autostartOff"));
               } catch (err) {
+                setCfg((c) => ({ ...c, autostart: !next }));
                 notify("bad", String(err));
               }
             }}
           />
           {t("st.autostart")}
         </label>
-        <label className={`check ${!cfg.autostart ? "disabled" : ""}`} title={t("st.needAutostart")}>
+        <label className="check">
           <input
             type="checkbox"
             checked={cfg.silent_start}
-            disabled={!cfg.autostart}
             onChange={(e) => set("silent_start", e.target.checked)}
           />
           {t("st.silent")}

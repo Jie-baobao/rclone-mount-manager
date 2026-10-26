@@ -490,10 +490,26 @@ export default function App() {
           t={t}
           onClose={() => setFormOpen(false)}
           onSaved={async (c) => {
+            // 新建连接保存后直接挂载，省掉“再点一次启动”；编辑保持原状态
+            const isNew = !editing;
             setFormOpen(false);
+            setEditing(null);
             setSelected(c.id);
-            notify("ok", t("toast.saved"));
             await refresh();
+            if (!isNew) {
+              notify("ok", t("toast.saved"));
+              return;
+            }
+            setBusy(c.id);
+            try {
+              await api.mount(c.id);
+              notify("ok", t("toast.savedMounted", { target: c.target }));
+            } catch (e) {
+              notify("bad", t("toast.savedMountFail", { e: String(e) }));
+            } finally {
+              setBusy("");
+              await refresh();
+            }
           }}
         />
       )}

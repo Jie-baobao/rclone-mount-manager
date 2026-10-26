@@ -28,7 +28,7 @@ await page.waitForTimeout(200);
 // 打开新建连接弹窗
 await page.getByRole("button", { name: /新建连接/ }).click();
 await page.waitForTimeout(400);
-await page.screenshot({ path: "docs/screenshots/modal.png" });
+await page.screenshot({ path: "docs/screenshots/new-connection.png" });
 
 // 展开高级选项
 const adv = page.locator("details.adv summary");
@@ -60,4 +60,4 @@ await dark.waitForTimeout(500);
 await dark.screenshot({ path: "docs/screenshots/main-dark.png" });
 
 await browser.close();
-console.log("截图完成：main / settings / settings-deps / modal / modal-adv / s3-form / error-state / main-dark");
+console.log("截图完成：main / settings / settings-deps / new-connection / modal-adv / s3-form / error-state / main-dark");

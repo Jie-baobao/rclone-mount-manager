@@ -1018,3 +1018,13 @@ input[type="number"].ctl {
 .modal.settings .about-actions > .btn {
   align-self: flex-start;
 }
+
+/* WebView2 / Chromium 会在密码框右侧自己画一个"显示密码"的眼睛按钮，
+   和我们自绘的「显示 / 隐藏」重复了，这里只保留自绘的那个。 */
+input[type="password"]::-ms-reveal,
+input[type="password"]::-ms-clear,
+input::-webkit-credentials-auto-fill-button {
+  display: none !important;
+  width: 0;
+  height: 0;
+}

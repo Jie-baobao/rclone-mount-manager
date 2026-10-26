@@ -123,36 +123,45 @@ pub fn obscure(app: &AppHandle, plain: &str) -> Result<String, String> {
 /// - 没写端口时补上端口（不少 NAS 的 WebDAV 走非标端口，漏了会打到 80 端口的反代上）
 /// - 自动拼接子路径
 pub fn normalize_webdav_url(host: &str, port: u16, path: &str) -> String {
-    let mut url = host.trim().to_string();
-    if !url.starts_with("http://") && !url.starts_with("https://") {
-        url = format!("http://{url}");
-    }
+    let raw = host.trim().trim_end_matches('/');
+    let url = if raw.starts_with("http://") || raw.starts_with("https://") {
+        raw.to_string()
+    } else {
+        format!("http://{raw}")
+    };
 
+    // 注意：必须从协议之后开始找斜杠，否则 "http://" 里的双斜杠会被当成路径分隔符，
+    // 拼出 "http:5005//192.168.50.4" 这种非法地址（rclone 报 builder error）。
     let scheme_end = url.find("://").map(|i| i + 3).unwrap_or(0);
     let after_scheme = &url[scheme_end..];
-    let has_port = match after_scheme.rfind(':') {
-        Some(idx) => !after_scheme[idx..].contains('/'),
-        None => false,
+    let (authority, rest) = match after_scheme.find('/') {
+        Some(idx) => (&after_scheme[..idx], &after_scheme[idx..]),
+        None => (after_scheme, ""),
     };
-    let default_port = url.starts_with("https://") && port == 443
-        || url.starts_with("http://") && port == 80;
+
+    // IPv6 字面量形如 [::1]:5005，只有 "]" 之后的冒号才是端口
+    let has_port = match authority.rfind(']') {
+        Some(idx) => authority[idx..].contains(':'),
+        None => authority.contains(':'),
+    };
+
+    let is_https = url.starts_with("https://");
+    let default_port = if is_https { port == 443 } else { port == 80 };
+    let mut out = format!("{}{}", &url[..scheme_end], authority);
     if !has_port && !default_port {
-        url = match url.find('/') {
-            Some(idx) => format!("{}:{}{}", &url[..idx], port, &url[idx..]),
-            None => format!("{url}:{port}"),
-        };
-    } else if !has_port && default_port {
-        // 默认端口不必写出来
+        out.push(':');
+        out.push_str(&port.to_string());
     }
+
+    // 地址里自带的子路径（例如 https://example.com/dav）要保留
+    out.push_str(rest.trim_end_matches('/'));
 
     let sub = path.trim().trim_matches('/');
     if !sub.is_empty() {
-        if !url.ends_with('/') {
-            url.push('/');
-        }
-        url.push_str(sub);
+        out.push('/');
+        out.push_str(sub);
     }
-    url
+    out
 }
 
 /// 把一条连接写进 rclone.conf 中名为 `rmm_<id>` 的 section。
