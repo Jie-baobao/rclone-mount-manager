@@ -6,7 +6,7 @@ authors = ["rclone-mount-manager contributors"]
 edition = "2021"
 rust-version = "1.77"
 license = "MIT"
-repository = "https://github.com/your-name/rclone-mount-manager"
+repository = "https://github.com/Jie-baobao/rclone-mount-manager"
 
 [lib]
 name = "rclone_mount_manager_lib"

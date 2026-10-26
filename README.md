@@ -96,7 +96,7 @@
 
 ### 2. 安装包
 
-从 [Releases](https://github.com/your-name/rclone-mount-manager/releases) 下载：
+从 [Releases](https://github.com/Jie-baobao/rclone-mount-manager/releases) 下载：
 
 - Windows：`.msi` / `.exe`
 - macOS：`.dmg`
@@ -107,7 +107,7 @@
 需要 **Node 18+**、**Rust 1.77+**；Windows 还需要 **Microsoft C++ Build Tools**（Tauri 编译依赖，`cl`/`link.exe`）。
 
 ```bash
-git clone https://github.com/your-name/rclone-mount-manager.git
+git clone https://github.com/Jie-baobao/rclone-mount-manager.git
 cd rclone-mount-manager
 npm install
 npm run tauri build       # 产物在 src-tauri/target/release/bundle/
