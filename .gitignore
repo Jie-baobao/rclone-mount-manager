@@ -22,3 +22,6 @@ src-tauri/gen/
 # 系统
 Thumbs.db
 desktop.ini
+
+# 本地构建产物 / 下载的安装包
+release-artifacts/
