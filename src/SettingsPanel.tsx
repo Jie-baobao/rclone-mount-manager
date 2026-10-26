@@ -7,7 +7,7 @@ import {
   type Settings,
   type UpdateReport,
 } from "./api";
-import { LANGUAGE_OPTIONS } from "./i18n";
+import { LANGUAGE_OPTIONS, makeT, resolveLanguage } from "./i18n";
 import type { T } from "./i18n";
 
 const DEFAULTS: Settings = {
@@ -60,7 +60,8 @@ export default function SettingsPanel({
       const saved = await api.saveSettings(cfg);
       setCfg(saved);
       onSaved(saved);
-      notify("ok", t("st.saved"));
+      // 提示语必须用「刚保存的语言」：此时父组件还没重渲染，直接用闭包里的 t 会显示旧语言
+      notify("ok", makeT(resolveLanguage(saved.language))("st.saved"));
     } catch (e) {
       notify("bad", String(e));
     } finally {
@@ -177,6 +178,7 @@ export default function SettingsPanel({
       title={t("st.title")}
       subtitle={t("st.subtitle")}
       onClose={onClose}
+      closeLabel={t("cf.close")}
       size="settings"
       footer={
         <>
@@ -201,7 +203,7 @@ export default function SettingsPanel({
           >
             {LANGUAGE_OPTIONS.map((o) => (
               <option key={o.code} value={o.code}>
-                {o.native}
+                {o.code === "system" ? t("st.langSystem") : o.native}
               </option>
             ))}
           </select>
@@ -251,9 +253,8 @@ export default function SettingsPanel({
         {num("warn_fails", t("st.warnFails"), 1, 99)}
         {num("error_fails", t("st.errorFails"), 1, 99)}
       </div>
-      <p className="tips">
-        {t("st.latencyNote")} {t("st.probeNote")}
-      </p>
+      <p className="tips">{t("st.latencyNote")}</p>
+      <p className="tips">{t("st.probeNote")}</p>
       <div className="row-actions">
         <button className="btn ghost small" onClick={() => setCfg({ ...DEFAULTS })}>
           {t("st.resetDefaults")}
@@ -326,9 +327,9 @@ export default function SettingsPanel({
         {report?.items.map((it) => (
           <div key={it.name} className="upd-row">
             <span>
-              {it.name}：{t("st.current")} {it.current || "—"}
+              {it.name} · {t("st.current")} {it.current || "—"}
               {it.latest ? ` / ${t("st.newest")} ${it.latest}` : ""}
-              {it.note ? `（${it.note}）` : ""}
+              {it.note ? ` (${it.note})` : ""}
             </span>
             {it.has_update && it.name === "rclone" && (
               <button className="btn primary small" disabled={!!working} onClick={() => doInstallRclone(it.latest)}>
@@ -366,9 +367,8 @@ export default function SettingsPanel({
           />
         </label>
       </div>
-      <p className="tips">
-        {t("st.exportNote")} {t("st.importNote")}
-      </p>
+      <p className="tips">{t("st.exportNote")}</p>
+      <p className="tips">{t("st.importNote")}</p>
     </Modal>
   );
 }

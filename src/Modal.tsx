@@ -14,6 +14,7 @@ export default function Modal({
   children,
   footer,
   size = "",
+  closeLabel = "Close",
 }: {
   title: string;
   subtitle?: string;
@@ -21,6 +22,7 @@ export default function Modal({
   children: ReactNode;
   footer?: ReactNode;
   size?: string;
+  closeLabel?: string;
 }) {
   const downOnBackdrop = useRef(false);
 
@@ -40,7 +42,7 @@ export default function Modal({
             <h2>{title}</h2>
             {subtitle && <p className="muted small">{subtitle}</p>}
           </div>
-          <button className="icon-btn" onClick={onClose} title="关闭">
+          <button className="icon-btn" onClick={onClose} title={closeLabel} aria-label={closeLabel}>
             ✕
           </button>
         </header>

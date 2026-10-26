@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ConnectionForm from "./ConnectionForm";
+import Dashboard from "./Dashboard";
 import SettingsPanel from "./SettingsPanel";
 import StatsPanel from "./StatsPanel";
 import {
@@ -61,7 +62,9 @@ export default function App() {
       const [list, st] = await Promise.all([api.list(), api.states()]);
       setConns(list);
       setStates(Object.fromEntries(st.map((s) => [s.id, s])));
-      setSelected((cur) => (cur && list.some((c) => c.id === cur) ? cur : list[0]?.id ?? null));
+      // 不做默认选中：启动和刷新后都停在首页（概览），选中只由用户点击产生。
+      // 选中的连接被删掉时才回落成 null。
+      setSelected((cur) => (cur && list.some((c) => c.id === cur) ? cur : null));
     } catch (e) {
       notify("bad", tRef.current("toast.readFail", { e: String(e) }));
     }
@@ -237,7 +240,7 @@ export default function App() {
   return (
     <div className="app">
       <aside className="sidebar">
-        <div className="brand">
+        <div className="brand" onClick={() => setSelected(null)} title={t("home.title")}>
           <span className="logo">◇</span>
           <div>
             <strong>Rclone Mount</strong>
@@ -272,7 +275,8 @@ export default function App() {
               <li
                 key={c.id}
                 className={`conn ${selected === c.id ? "active" : ""}`}
-                onClick={() => setSelected(c.id)}
+                // 再点一次已选中的连接就取消选中，回到首页概览
+                onClick={() => setSelected((prev) => (prev === c.id ? null : c.id))}
                 title={`${c.host}${c.protocol === "s3" ? "" : `:${c.port}`}`}
               >
                 <span className={h.cls} title={healthTip(st, t)} />
@@ -341,18 +345,7 @@ export default function App() {
       </aside>
 
       <main className="main">
-        {!current && (
-          <div className="placeholder">
-            <h2>{t("app.heroTitle")}</h2>
-            <p>{t("app.heroSub")}</p>
-            <ol>
-              <li>{t("app.heroStep1")}</li>
-              <li>{t("app.heroStep2")}</li>
-              <li>{t("app.heroStep3")}</li>
-            </ol>
-            <p className="muted small">{t("app.heroTip")}</p>
-          </div>
-        )}
+        {!current && <Dashboard conns={conns} states={states} t={t} onSelect={setSelected} />}
 
         {current && (
           <>
@@ -402,7 +395,7 @@ export default function App() {
                 <div>
                   <label>{current.protocol === "s3" ? t("app.kvAccessKey") : t("app.kvUser")}</label>
                   <span className="ellipsis" title={current.user}>
-                    {current.user || `（${t("app.anon")}）`}
+                    {current.user || t("app.anon")}
                   </span>
                 </div>
                 <div>
@@ -487,6 +480,7 @@ export default function App() {
               stats={stats}
               state={currentState}
               threshold={settings?.latency_threshold_ms ?? 1200}
+              intervalSecs={settings?.probe_interval_secs ?? 15}
               t={t}
             />
 

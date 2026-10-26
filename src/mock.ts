@@ -117,15 +117,15 @@ const states: Record<string, MountState> = {
   },
   a3: {
     id: "a3",
-    mounted: false,
-    pid: null,
-    since: null,
-    restarts: 0,
+    mounted: true,
+    pid: 4780,
+    since: 900,
+    restarts: 2,
     last_error: null,
     log_path: "",
-    health: "stopped",
+    health: "error",
     latency_ms: null,
-    last_check: null,
+    last_check: now - 15,
   },
 };
 
@@ -146,7 +146,7 @@ function reply(cmd: string, args?: Record<string, unknown>): unknown {
     case "get_env":
       return {
         platform: "windows x86_64",
-        app_version: "0.3.0",
+        app_version: "0.3.4",
         rclone_path: "C:\\Program Files\\Rclone Mount Manager\\resources\\rclone\\rclone.exe",
         rclone_version: "1.75.2",
         rclone_source: "bundled",
@@ -185,8 +185,12 @@ function reply(cmd: string, args?: Record<string, unknown>): unknown {
         elapsed_secs: 1620,
         probes_ok: 96,
         probes_fail: 4,
-        latency_ms: 41,
-        history: [38, 42, 40, 45, 39, 0, 44, 41, 43, 40, 0, 46, 42, 39, 41, 44, 40, 43, 41, 38, 42, 45, 40, 41],
+        latency_ms: 240,
+        // 20 个点刚好是图表的窗口长度：两个 0（探测失败）+ 两次超过 1200ms 阈值的尖峰
+        history: [
+          240, 260, 235, 0, 210, 320, 1450, 900, 420, 380, 340, 300, 280, 260, 1300, 860, 400, 360, 320,
+          300, 270, 250, 265, 240,
+        ],
       } satisfies Stats;
     case "get_autostart":
       return true;

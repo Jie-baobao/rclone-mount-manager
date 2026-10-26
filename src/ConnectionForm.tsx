@@ -162,6 +162,7 @@ export default function ConnectionForm({ initial, env, t, onClose, onSaved }: Pr
       title={editing ? t("cf.editTitle") : t("cf.newTitle")}
       subtitle={t("cf.required")}
       onClose={onClose}
+      closeLabel={t("cf.close")}
       footer={
         <>
           <button className="btn ghost" onClick={onClose}>

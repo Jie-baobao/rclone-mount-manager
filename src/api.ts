@@ -237,7 +237,7 @@ export function healthOf(state: MountState | undefined, t: T): { cls: string; la
 /** 状态点的悬停提示，带上延迟数字更好判断 */
 export function healthTip(state: MountState | undefined, t: T): string {
   if (!state) return "";
-  if (!state.mounted) return state.last_error ? `${t("h.lastFail")}：${state.last_error.split("\n")[0]}` : t("h.stopped");
+  if (!state.mounted) return state.last_error ? `${t("h.lastFail")} · ${state.last_error.split("\n")[0]}` : t("h.stopped");
   if (state.latency_ms != null) return `${healthOf(state, t).label} · ${state.latency_ms} ms`;
   return healthOf(state, t).label;
 }
