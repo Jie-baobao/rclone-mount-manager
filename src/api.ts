@@ -7,7 +7,10 @@ function call<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
   return isMock() ? mockInvoke<T>(cmd, args) : invoke<T>(cmd, args);
 }
 
-export type Protocol = "smb" | "webdav" | "ftp" | "sftp";
+export type Protocol = "smb" | "webdav" | "ftp" | "sftp" | "s3";
+
+/** 圆点颜色语义 */
+export type Health = "healthy" | "slow" | "error" | "stopped";
 
 export interface Connection {
   id: string;
@@ -20,6 +23,9 @@ export interface Connection {
   target: string;
   cache_dir: string;
   ignore_cert: boolean;
+  s3_provider: string;
+  region: string;
+  s3_path_style: boolean;
   read_only: boolean;
   network_mode: boolean;
   bwlimit: string;
@@ -43,6 +49,9 @@ export interface ConnectionInput {
   target: string;
   cache_dir: string;
   ignore_cert: boolean;
+  s3_provider: string;
+  region: string;
+  s3_path_style: boolean;
   read_only: boolean;
   network_mode: boolean;
   bwlimit: string;
@@ -61,6 +70,9 @@ export interface MountState {
   restarts: number;
   last_error: string | null;
   log_path: string;
+  health: Health;
+  latency_ms: number | null;
+  last_check: number | null;
 }
 
 export interface DiagResult {
@@ -73,10 +85,27 @@ export interface DiagResult {
 
 export interface EnvInfo {
   platform: string;
+  app_version: string;
   rclone_path: string;
   rclone_version: string;
+  rclone_source: string;
+  rclone_bundled: boolean;
   fuse_ready: boolean;
   fuse_hint: string;
+  fuse_version: string;
+}
+
+export interface VersionInfo {
+  name: string;
+  current: string;
+  latest: string;
+  has_update: boolean;
+  url: string;
+  note: string;
+}
+
+export interface UpdateReport {
+  items: VersionInfo[];
 }
 
 export const api = {
@@ -96,6 +125,10 @@ export const api = {
   getAutostart: () => call<boolean>("get_autostart"),
   setAutostart: (enable: boolean) => call<void>("set_autostart", { enable }),
   test: (input: ConnectionInput) => call<DiagResult>("test_connection", { input }),
+  checkUpdates: () => call<UpdateReport>("check_updates"),
+  installRclone: (version: string) => call<string>("install_rclone", { version }),
+  installWinfsp: () => call<string>("install_winfsp"),
+  openUrl: (url: string) => call<void>("open_url", { url }),
 };
 
 /** 后端主动推送的事件 */
@@ -144,7 +177,37 @@ export const PROTOCOL_META: Record<
     pathLabel: "子路径",
     pathPlaceholder: "通常留空",
   },
+  s3: {
+    label: "S3 兼容对象存储",
+    short: "S3",
+    port: 443,
+    hint: "服务地址，例如 s3.amazonaws.com 或 minio.example.com:9000",
+    pathLabel: "Bucket（可选）",
+    pathPlaceholder: "例如 photos",
+  },
 };
+
+/** S3 兼容服务商预设：provider 是 rclone 的取值，endpoint 是官方地址示例 */
+export interface S3Preset {
+  key: string;
+  label: string;
+  provider: string;
+  endpoint: string;
+  region: string;
+  pathStyle: boolean;
+}
+
+export const S3_PRESETS: S3Preset[] = [
+  { key: "aws", label: "Amazon S3", provider: "AWS", endpoint: "s3.amazonaws.com", region: "us-east-1", pathStyle: false },
+  { key: "aliyun", label: "阿里云 OSS", provider: "Alibaba", endpoint: "oss-cn-hangzhou.aliyuncs.com", region: "cn-hangzhou", pathStyle: false },
+  { key: "tencent", label: "腾讯云 COS", provider: "TencentCOS", endpoint: "cos.ap-guangzhou.myqcloud.com", region: "ap-guangzhou", pathStyle: false },
+  { key: "r2", label: "Cloudflare R2", provider: "Cloudflare", endpoint: "https://<账号ID>.r2.cloudflarestorage.com", region: "auto", pathStyle: false },
+  { key: "b2", label: "Backblaze B2", provider: "B2", endpoint: "s3.us-west-004.backblazeb2.com", region: "us-west-004", pathStyle: false },
+  { key: "wasabi", label: "Wasabi", provider: "Wasabi", endpoint: "s3.us-east-1.wasabisys.com", region: "us-east-1", pathStyle: false },
+  { key: "do", label: "DigitalOcean Spaces", provider: "DigitalOcean", endpoint: "nyc3.digitaloceanspaces.com", region: "nyc3", pathStyle: false },
+  { key: "minio", label: "MinIO / 自建", provider: "Minio", endpoint: "minio.example.com:9000", region: "us-east-1", pathStyle: true },
+  { key: "other", label: "其它 S3 兼容", provider: "Other", endpoint: "", region: "", pathStyle: true },
+];
 
 export function isWindows(env: EnvInfo | null): boolean {
   return !!env && env.platform.startsWith("windows");
@@ -157,4 +220,24 @@ export function formatUptime(seconds: number | null): string {
   const h = Math.floor(seconds / 3600);
   const m = Math.floor((seconds % 3600) / 60);
   return `${h} 小时 ${m} 分`;
+}
+
+/** 四色状态：返回样式类名与中文说明 */
+export function healthOf(state: MountState | undefined): { cls: string; label: string } {
+  if (!state || !state.mounted) {
+    return state?.last_error
+      ? { cls: "dot bad", label: "上次挂载失败" }
+      : { cls: "dot off", label: "已停止" };
+  }
+  if (state.health === "error") return { cls: "dot bad", label: "连接异常" };
+  if (state.health === "slow") return { cls: "dot warn", label: "网络波动" };
+  return { cls: "dot ok", label: "运行中" };
+}
+
+/** 状态点的悬停提示，带上延迟数字更好判断 */
+export function healthTip(state: MountState | undefined): string {
+  if (!state) return "";
+  if (!state.mounted) return state.last_error ? `上次挂载失败：${state.last_error.split("\n")[0]}` : "已停止";
+  if (state.latency_ms != null) return `${healthOf(state).label} · 延迟 ${state.latency_ms} ms`;
+  return healthOf(state).label;
 }

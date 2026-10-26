@@ -54,6 +54,46 @@ jobs:
       - name: 安装前端依赖
         run: npm ci
 
+      # 把 rclone 与 WinFsp 装进安装包，用户装完即用、无需自己配环境
+      - name: 准备内置依赖（rclone / WinFsp）
+        shell: bash
+        run: |
+          set -euo pipefail
+          RCLONE_VER=1.75.2
+          WINFSP_URL="https://github.com/winfsp/winfsp/releases/download/v2.1/winfsp-2.1.25156.msi"
+
+          case "${RUNNER_OS}" in
+            Windows) PLAT=windows-amd64; BIN=rclone.exe ;;
+            Linux)   PLAT=linux-amd64;   BIN=rclone ;;
+            macOS)
+              if [ "${{ matrix.args }}" = "--target aarch64-apple-darwin" ]; then
+                PLAT=osx-arm64
+              else
+                PLAT=osx-amd64
+              fi
+              BIN=rclone
+              ;;
+          esac
+
+          mkdir -p src-tauri/resources/rclone src-tauri/resources/winfsp
+          ZIP="/tmp/rclone-${PLAT}.zip"
+          curl -fsSL -o "$ZIP" "https://downloads.rclone.org/v${RCLONE_VER}/rclone-v${RCLONE_VER}-${PLAT}.zip"
+
+          if command -v unzip >/dev/null 2>&1; then
+            unzip -q -o "$ZIP" -d /tmp/rclone-extract
+          else
+            powershell -NoProfile -Command "Expand-Archive -Path '$(cygpath -w "$ZIP")' -DestinationPath '$(cygpath -w /tmp/rclone-extract)' -Force"
+          fi
+
+          cp "/tmp/rclone-extract/rclone-v${RCLONE_VER}-${PLAT}/${BIN}" "src-tauri/resources/rclone/${BIN}"
+          chmod +x "src-tauri/resources/rclone/${BIN}" || true
+
+          if [ "${RUNNER_OS}" = "Windows" ]; then
+            curl -fsSL -o src-tauri/resources/winfsp/winfsp.msi "$WINFSP_URL"
+          fi
+
+          ls -la src-tauri/resources/rclone src-tauri/resources/winfsp
+
       - name: 构建并（打 tag 时）发布
         uses: tauri-apps/tauri-action@v0
         env:

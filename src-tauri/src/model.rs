@@ -9,6 +9,8 @@ pub enum Protocol {
     Webdav,
     Ftp,
     Sftp,
+    /// S3 兼容对象存储（AWS S3 / MinIO / 阿里云 OSS / 腾讯 COS / R2 / B2 / Wasabi…）
+    S3,
 }
 
 impl Protocol {
@@ -18,6 +20,7 @@ impl Protocol {
             Protocol::Webdav => "webdav",
             Protocol::Ftp => "ftp",
             Protocol::Sftp => "sftp",
+            Protocol::S3 => "s3",
         }
     }
 
@@ -28,11 +31,17 @@ impl Protocol {
             Protocol::Webdav => 80,
             Protocol::Ftp => 21,
             Protocol::Sftp => 22,
+            // S3 走 HTTPS，端口由 endpoint 决定，这个值只用于表单占位
+            Protocol::S3 => 443,
         }
     }
 
     pub fn is_webdav(self) -> bool {
         matches!(self, Protocol::Webdav)
+    }
+
+    pub fn is_s3(self) -> bool {
+        matches!(self, Protocol::S3)
     }
 }
 
@@ -43,6 +52,7 @@ impl fmt::Display for Protocol {
             Protocol::Webdav => "WebDAV",
             Protocol::Ftp => "FTP",
             Protocol::Sftp => "SFTP",
+            Protocol::S3 => "S3",
         };
         write!(f, "{s}")
     }
@@ -67,6 +77,12 @@ pub struct Connection {
     pub cache_dir: String,
     /// WebDAV 自签证书时忽略校验
     pub ignore_cert: bool,
+    /// S3 兼容：rclone 的 provider 取值（AWS / Minio / Alibaba / TencentCOS…）
+    pub s3_provider: String,
+    /// S3 兼容：区域，例如 ap-northeast-1
+    pub region: String,
+    /// S3 兼容：强制 path-style（MinIO 与多数自建网关需要）
+    pub s3_path_style: bool,
     /// 只读挂载
     pub read_only: bool,
     /// Windows：挂成「网络驱动器」而不是「本地磁盘」
@@ -99,6 +115,9 @@ impl Default for Connection {
             target: String::new(),
             cache_dir: String::new(),
             ignore_cert: false,
+            s3_provider: "Other".into(),
+            region: String::new(),
+            s3_path_style: false,
             read_only: false,
             network_mode: false,
             bwlimit: String::new(),
@@ -121,6 +140,12 @@ pub struct MountState {
     pub restarts: u32,
     pub last_error: Option<String>,
     pub log_path: String,
+    /// healthy（绿）/ slow（黄）/ error（红）/ stopped（灰）
+    pub health: String,
+    /// 最近一次探测的往返毫秒数
+    pub latency_ms: Option<u64>,
+    /// 最近一次探测时间（unix 秒）
+    pub last_check: Option<i64>,
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -164,6 +189,9 @@ pub struct ConnectionInput {
     pub target: String,
     pub cache_dir: String,
     pub ignore_cert: bool,
+    pub s3_provider: String,
+    pub region: String,
+    pub s3_path_style: bool,
     pub read_only: bool,
     pub network_mode: bool,
     pub bwlimit: String,
@@ -188,6 +216,9 @@ impl Default for ConnectionInput {
             target: String::new(),
             cache_dir: String::new(),
             ignore_cert: false,
+            s3_provider: "Other".into(),
+            region: String::new(),
+            s3_path_style: false,
             read_only: false,
             network_mode: false,
             bwlimit: String::new(),

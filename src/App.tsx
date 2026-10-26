@@ -4,11 +4,14 @@ import {
   api,
   events,
   formatUptime,
+  healthOf,
+  healthTip,
   isWindows,
   PROTOCOL_META,
   type Connection,
   type EnvInfo,
   type MountState,
+  type UpdateReport,
 } from "./api";
 
 interface Toast {
@@ -23,6 +26,7 @@ export default function App() {
   const [selected, setSelected] = useState<string | null>(null);
   const [editing, setEditing] = useState<Connection | null>(null);
   const [formOpen, setFormOpen] = useState(false);
+  const [aboutOpen, setAboutOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [log, setLog] = useState("");
   const [autostart, setAutostart] = useState(false);
@@ -34,6 +38,10 @@ export default function App() {
     setToast({ kind, text });
     if (toastTimer.current) window.clearTimeout(toastTimer.current);
     toastTimer.current = window.setTimeout(() => setToast(null), 4500);
+  }, []);
+
+  const refreshEnv = useCallback(() => {
+    api.env().then(setEnv).catch(() => setEnv(null));
   }, []);
 
   const refresh = useCallback(async () => {
@@ -49,10 +57,10 @@ export default function App() {
 
   // 初次加载
   useEffect(() => {
-    api.env().then(setEnv).catch(() => setEnv(null));
+    refreshEnv();
     api.getAutostart().then(setAutostart).catch(() => undefined);
     refresh();
-  }, [refresh]);
+  }, [refresh, refreshEnv]);
 
   // 后端事件驱动的实时刷新（比轮询更跟手），再补一个低频兜底轮询
   useEffect(() => {
@@ -200,7 +208,11 @@ export default function App() {
     const q = query.trim().toLowerCase();
     if (!q) return conns;
     return conns.filter(
-      (c) => c.name.toLowerCase().includes(q) || c.host.toLowerCase().includes(q) || c.target.toLowerCase().includes(q)
+      (c) =>
+        c.name.toLowerCase().includes(q) ||
+        c.host.toLowerCase().includes(q) ||
+        c.target.toLowerCase().includes(q) ||
+        c.user.toLowerCase().includes(q)
     );
   }, [conns, query]);
 
@@ -227,33 +239,51 @@ export default function App() {
         </button>
 
         <input
-          className="search"
+          className="ctl search"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder="搜索名称 / 地址 / 盘符"
+          placeholder="搜索名称 / 地址 / 盘符 / 用户"
         />
 
         <ul className="conn-list">
           {filtered.map((c) => {
             const st = states[c.id];
+            const h = healthOf(st);
+            const busyThis = busy === c.id;
             return (
               <li
                 key={c.id}
                 className={`conn ${selected === c.id ? "active" : ""}`}
                 onClick={() => setSelected(c.id)}
-                title={`${c.host}:${c.port}`}
+                title={`${c.host}${c.protocol === "s3" ? "" : `:${c.port}`}`}
               >
-                <span className={`dot ${st?.mounted ? "on" : ""}`} />
+                <span className={h.cls} title={healthTip(st)} />
                 <div className="conn-meta">
                   <span className="conn-name">
                     {c.pinned && <span className="pin">★</span>}
                     {c.name}
                   </span>
                   <span className="conn-sub">
-                    {PROTOCOL_META[c.protocol].short} · {c.target}
-                    {st?.restarts ? ` · 重连 ${st.restarts}` : ""}
+                    <span className="tag">{PROTOCOL_META[c.protocol].short}</span>
+                    <span className="tag mono">{c.target}</span>
+                    <span className="conn-user" title={c.user || "匿名"}>
+                      {c.user || "匿名"}
+                    </span>
                   </span>
                 </div>
+                <button
+                  className={`row-toggle ${st?.mounted ? "stop" : "start"}`}
+                  disabled={busyThis}
+                  title={st?.mounted ? "停止挂载" : "启动挂载"}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (busyThis) return;
+                    if (st?.mounted) void handleUnmount(c);
+                    else void handleMount(c);
+                  }}
+                >
+                  {busyThis ? "…" : st?.mounted ? "停止" : "启动"}
+                </button>
               </li>
             );
           })}
@@ -264,10 +294,10 @@ export default function App() {
 
         <div className="bulk">
           <button className="btn ghost small" onClick={handleMountAll}>
-            全部挂载
+            全部启动
           </button>
           <button className="btn ghost small" onClick={handleUnmountAll}>
-            全部卸载
+            全部停止
           </button>
         </div>
 
@@ -276,10 +306,16 @@ export default function App() {
             <input type="checkbox" checked={autostart} onChange={(e) => toggleAutostart(e.target.checked)} />
             开机自启动
           </label>
-          <div className={env?.fuse_ready ? "env ok" : "env bad"}>
-            {env ? `${env.fuse_ready ? "●" : "○"} ${env.fuse_hint}` : "正在检测环境…"}
-          </div>
-          {env?.rclone_version && <div className="muted mono">{env.rclone_version}</div>}
+          <button className="env-card" onClick={() => setAboutOpen(true)} title="查看版本与依赖状态">
+            <span className={env?.fuse_ready && env?.rclone_version ? "env ok" : "env bad"}>
+              {env ? (env.fuse_ready && env.rclone_version ? "● 环境就绪" : "○ 环境缺依赖") : "正在检测环境…"}
+            </span>
+            <span className="env-ver mono">
+              {env
+                ? `rclone ${env.rclone_version || "—"} · ${env.fuse_version ? `WinFsp ${env.fuse_version}` : "驱动—"}`
+                : ""}
+            </span>
+          </button>
         </div>
       </aside>
 
@@ -289,9 +325,7 @@ export default function App() {
             <h2>把 NAS 挂成本地盘</h2>
             <p>三步：填连接 → 测通 → 挂载。不需要账号登录，断网也能用。</p>
             <ol>
-              <li>
-                选协议（SMB / WebDAV / FTP / SFTP），填地址和账号密码
-              </li>
+              <li>选协议（SMB / WebDAV / FTP / SFTP / S3 兼容），填地址和账号密码</li>
               <li>点「测试连接」，先确认认证通过（WebDAV 会返回真实状态码）</li>
               <li>选盘符保存，点「挂载」，资源管理器里就出现了</li>
             </ol>
@@ -308,13 +342,18 @@ export default function App() {
                   {current.pinned && <span className="pin">★</span>}
                 </h2>
                 <p className="muted mono">
-                  {PROTOCOL_META[current.protocol].label} · {current.host}:{current.port}
-                  {current.path ? `/${current.path}` : ""}
+                  {PROTOCOL_META[current.protocol].label} · {current.host}
+                  {current.protocol === "s3" ? "" : `:${current.port}`}
+                  {current.path ? ` / ${current.path}` : ""}
                 </p>
               </div>
               <div className="head-actions">
                 <span className={`badge ${currentState?.mounted ? "on" : ""}`}>
-                  {currentState?.mounted ? `已挂载 ${current.target}` : "未挂载"}
+                  {currentState?.mounted
+                    ? `${healthOf(currentState).label} ${current.target}${
+                        currentState.latency_ms != null ? ` · ${currentState.latency_ms}ms` : ""
+                      }`
+                    : "未挂载"}
                 </span>
                 <button
                   className="btn ghost small"
@@ -340,31 +379,35 @@ export default function App() {
                   <span className="mono">{current.target}</span>
                 </div>
                 <div>
-                  <label>用户名</label>
-                  <span>{current.user || "（匿名）"}</span>
+                  <label>{current.protocol === "s3" ? "Access Key" : "用户名"}</label>
+                  <span className="ellipsis" title={current.user}>
+                    {current.user || "（匿名）"}
+                  </span>
                 </div>
                 <div>
                   <label>已运行</label>
                   <span>{currentState?.mounted ? formatUptime(currentState.since) : "—"}</span>
                 </div>
                 <div>
-                  <label>自动重连</label>
-                  <span>{current.reconnect ? (currentState?.restarts ? `已重连 ${currentState.restarts} 次` : "开启") : "关闭"}</span>
+                  <label>连接质量</label>
+                  <span>
+                    {currentState?.mounted
+                      ? currentState.latency_ms != null
+                        ? `${healthOf(currentState).label}（${currentState.latency_ms} ms）`
+                        : healthOf(currentState).label
+                      : "—"}
+                  </span>
                 </div>
               </div>
 
               <div className="actions">
                 {currentState?.mounted ? (
                   <button className="btn" disabled={busy === current.id} onClick={() => handleUnmount(current)}>
-                    卸载
+                    停止挂载
                   </button>
                 ) : (
-                  <button
-                    className="btn primary"
-                    disabled={busy === current.id}
-                    onClick={() => handleMount(current)}
-                  >
-                    {busy === current.id ? "挂载中…" : "挂载"}
+                  <button className="btn primary" disabled={busy === current.id} onClick={() => handleMount(current)}>
+                    {busy === current.id ? "挂载中…" : "启动挂载"}
                   </button>
                 )}
                 <button
@@ -449,7 +492,173 @@ export default function App() {
         />
       )}
 
+      {aboutOpen && (
+        <AboutPanel
+          env={env}
+          onClose={() => setAboutOpen(false)}
+          onRefreshEnv={refreshEnv}
+          notify={notify}
+        />
+      )}
+
       {toast && <div className={`toast ${toast.kind}`}>{toast.text}</div>}
+    </div>
+  );
+}
+
+/** 版本与依赖面板：管理器 / rclone / WinFsp 的当前版本、检查更新、一键安装 */
+function AboutPanel({
+  env,
+  onClose,
+  onRefreshEnv,
+  notify,
+}: {
+  env: EnvInfo | null;
+  onClose: () => void;
+  onRefreshEnv: () => void;
+  notify: (kind: "ok" | "bad", text: string) => void;
+}) {
+  const [report, setReport] = useState<UpdateReport | null>(null);
+  const [checking, setChecking] = useState(false);
+  const [working, setWorking] = useState("");
+
+  async function check() {
+    setChecking(true);
+    try {
+      setReport(await api.checkUpdates());
+    } catch (e) {
+      notify("bad", `检查更新失败：${e}`);
+    } finally {
+      setChecking(false);
+    }
+  }
+
+  async function doInstallRclone(version: string) {
+    setWorking("rclone");
+    try {
+      const v = await api.installRclone(version);
+      notify("ok", `rclone 已更新到 ${v}`);
+      onRefreshEnv();
+      await check();
+    } catch (e) {
+      notify("bad", String(e));
+    } finally {
+      setWorking("");
+    }
+  }
+
+  async function doInstallWinfsp() {
+    setWorking("winfsp");
+    try {
+      const msg = await api.installWinfsp();
+      notify("ok", msg);
+      onRefreshEnv();
+      await check();
+    } catch (e) {
+      notify("bad", String(e));
+    } finally {
+      setWorking("");
+    }
+  }
+
+  const sourceLabel: Record<string, string> = {
+    bundled: "安装包内置",
+    updated: "已手动更新",
+    sidecar: "同目录文件",
+    env: "环境变量指定",
+    path: "系统 PATH",
+  };
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal narrow" onClick={(e) => e.stopPropagation()}>
+        <header className="modal-head">
+          <div>
+            <h2>版本与依赖</h2>
+            <p className="muted small">rclone 与挂载驱动都可以在这里查看和一键更新</p>
+          </div>
+          <button className="icon-btn" onClick={onClose} title="关闭">
+            ✕
+          </button>
+        </header>
+
+        <div className="modal-body">
+          <div className="ver-list">
+            <div className="ver-row">
+              <div>
+                <strong>管理器</strong>
+                <div className="muted small mono">{env?.app_version ? `v${env.app_version}` : "—"}</div>
+              </div>
+              <button className="btn ghost small" onClick={() => api.openUrl("https://github.com/Jie-baobao/rclone-mount-manager/releases")}>
+                发布页
+              </button>
+            </div>
+
+            <div className="ver-row">
+              <div className="ver-main">
+                <strong>rclone</strong>
+                <div className="muted small mono">
+                  {env?.rclone_version ? `v${env.rclone_version}` : "未找到"} ·{" "}
+                  {sourceLabel[env?.rclone_source ?? ""] ?? "未知来源"}
+                </div>
+                {env?.rclone_path && <div className="path mono" title={env.rclone_path}>{env.rclone_path}</div>}
+              </div>
+              <button className="btn ghost small" onClick={() => api.openUrl("https://rclone.org/downloads/")}>
+                官网
+              </button>
+            </div>
+
+            <div className="ver-row">
+              <div>
+                <strong>WinFsp（挂载驱动）</strong>
+                <div className={env?.fuse_ready ? "muted small mono" : "bad small mono"}>
+                  {env?.fuse_ready ? (env.fuse_version ? `v${env.fuse_version}` : "已安装") : "未安装"}
+                </div>
+              </div>
+              <button className="btn small" disabled={working === "winfsp"} onClick={doInstallWinfsp}>
+                {working === "winfsp" ? "安装中…" : env?.fuse_ready ? "重新安装" : "一键安装"}
+              </button>
+            </div>
+          </div>
+
+          <div className="about-actions">
+            <button className="btn" onClick={check} disabled={checking}>
+              {checking ? "检查中…" : "检查更新"}
+            </button>
+            {report?.items.map((it) => (
+              <div key={it.name} className="upd-row">
+                <span>
+                  {it.name}：当前 {it.current || "—"}
+                  {it.latest ? ` / 最新 ${it.latest}` : ""}
+                  {it.note ? `（${it.note}）` : ""}
+                </span>
+                {it.has_update && it.name === "rclone" && (
+                  <button className="btn primary small" disabled={!!working} onClick={() => doInstallRclone(it.latest)}>
+                    {working === "rclone" ? "更新中…" : "一键更新"}
+                  </button>
+                )}
+                {it.has_update && it.name !== "rclone" && (
+                  <button className="btn ghost small" onClick={() => api.openUrl(it.url)}>
+                    去下载
+                  </button>
+                )}
+                {!it.has_update && it.latest && <span className="muted small">已是最新</span>}
+              </div>
+            ))}
+          </div>
+
+          <p className="tips">
+            rclone 更新会下载官方发布包并解压到应用配置目录，下次挂载自动生效（优先于内置版本）。
+            WinFsp 安装需要管理员权限，会弹出一次系统授权窗口。
+          </p>
+        </div>
+
+        <footer className="modal-foot">
+          <button className="btn ghost" onClick={onClose}>
+            关闭
+          </button>
+        </footer>
+      </div>
     </div>
   );
 }

@@ -3,6 +3,7 @@ import {
   api,
   isWindows,
   PROTOCOL_META,
+  S3_PRESETS,
   type Connection,
   type ConnectionInput,
   type DiagResult,
@@ -43,12 +44,20 @@ export default function ConnectionForm({ initial, env, onClose, onSaved }: Props
   const [reconnect, setReconnect] = useState(initial?.reconnect ?? true);
   const [autoMount, setAutoMount] = useState(initial?.auto_mount ?? false);
 
+  const [s3Provider, setS3Provider] = useState(initial?.s3_provider ?? "Other");
+  const [region, setRegion] = useState(initial?.region ?? "");
+  const [pathStyle, setPathStyle] = useState(initial?.s3_path_style ?? false);
+  const [presetKey, setPresetKey] = useState(
+    S3_PRESETS.find((p) => p.provider === (initial?.s3_provider ?? "Other"))?.key ?? "other"
+  );
+
   const [testing, setTesting] = useState(false);
   const [saving, setSaving] = useState(false);
   const [result, setResult] = useState<DiagResult | null>(null);
   const [error, setError] = useState("");
 
   const meta = PROTOCOL_META[protocol];
+  const isS3 = protocol === "s3";
 
   const payload = useMemo<ConnectionInput>(
     () => ({
@@ -63,6 +72,9 @@ export default function ConnectionForm({ initial, env, onClose, onSaved }: Props
       target,
       cache_dir: cacheDir,
       ignore_cert: ignoreCert,
+      s3_provider: s3Provider,
+      region,
+      s3_path_style: pathStyle,
       read_only: readOnly,
       network_mode: networkMode,
       bwlimit,
@@ -85,6 +97,9 @@ export default function ConnectionForm({ initial, env, onClose, onSaved }: Props
       target,
       cacheDir,
       ignoreCert,
+      s3Provider,
+      region,
+      pathStyle,
       readOnly,
       networkMode,
       bwlimit,
@@ -100,6 +115,17 @@ export default function ConnectionForm({ initial, env, onClose, onSaved }: Props
     setPort(PROTOCOL_META[p].port);
     setResult(null);
     if (!editing && win) setTarget(target || "Z:");
+  }
+
+  function applyPreset(key: string) {
+    setPresetKey(key);
+    const preset = S3_PRESETS.find((p) => p.key === key);
+    if (!preset) return;
+    setS3Provider(preset.provider);
+    setPathStyle(preset.pathStyle);
+    if (preset.endpoint) setHost(preset.endpoint);
+    setRegion(preset.region);
+    setResult(null);
   }
 
   async function doTest() {
@@ -143,14 +169,14 @@ export default function ConnectionForm({ initial, env, onClose, onSaved }: Props
 
         <div className="modal-body">
           <div className="form-grid">
-            <label>
-              连接名称 *
-              <input value={name} onChange={(e) => setName(e.target.value)} placeholder="例如：家里 NAS" />
+            <label className="field">
+              <span>连接名称 *</span>
+              <input className="ctl" value={name} onChange={(e) => setName(e.target.value)} placeholder="例如：家里 NAS" />
             </label>
 
-            <label>
-              协议
-              <select value={protocol} onChange={(e) => changeProtocol(e.target.value as Protocol)}>
+            <label className="field">
+              <span>协议</span>
+              <select className="ctl" value={protocol} onChange={(e) => changeProtocol(e.target.value as Protocol)}>
                 {(Object.keys(PROTOCOL_META) as Protocol[]).map((p) => (
                   <option key={p} value={p}>
                     {PROTOCOL_META[p].label}
@@ -159,52 +185,75 @@ export default function ConnectionForm({ initial, env, onClose, onSaved }: Props
               </select>
             </label>
 
-            <label className="span2">
-              {protocol === "webdav" ? "服务器地址 *" : "主机 / IP *"}
-              <input value={host} onChange={(e) => setHost(e.target.value)} placeholder={meta.hint} />
+            {isS3 && (
+              <label className="field span2">
+                <span>服务商预设</span>
+                <select className="ctl" value={presetKey} onChange={(e) => applyPreset(e.target.value)}>
+                  {S3_PRESETS.map((p) => (
+                    <option key={p.key} value={p.key}>
+                      {p.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
+
+            <label className={isS3 ? "field span2" : "field span2"}>
+              <span>{isS3 ? "服务地址（Endpoint）*" : protocol === "webdav" ? "服务器地址 *" : "主机 / IP *"}</span>
+              <input className="ctl" value={host} onChange={(e) => setHost(e.target.value)} placeholder={meta.hint} />
             </label>
 
-            <label>
-              端口
-              <input
-                type="number"
-                value={port}
-                onChange={(e) => setPort(Number(e.target.value) || meta.port)}
-                placeholder={String(meta.port)}
-              />
+            {!isS3 && (
+              <label className="field">
+                <span>端口</span>
+                <input
+                  className="ctl"
+                  type="number"
+                  value={port}
+                  onChange={(e) => setPort(Number(e.target.value) || meta.port)}
+                  placeholder={String(meta.port)}
+                />
+              </label>
+            )}
+
+            <label className={isS3 ? "field" : "field"}>
+              <span>{meta.pathLabel}</span>
+              <input className="ctl" value={path} onChange={(e) => setPath(e.target.value)} placeholder={meta.pathPlaceholder} />
             </label>
 
-            <label>
-              {meta.pathLabel}
-              <input value={path} onChange={(e) => setPath(e.target.value)} placeholder={meta.pathPlaceholder} />
+            {isS3 && (
+              <label className="field">
+                <span>区域（Region）</span>
+                <input className="ctl" value={region} onChange={(e) => setRegion(e.target.value)} placeholder="例如 us-east-1" />
+              </label>
+            )}
+
+            <label className="field">
+              <span>{isS3 ? "Access Key ID" : "用户名"}</span>
+              <input className="ctl" value={user} onChange={(e) => setUser(e.target.value)} autoComplete="off" />
             </label>
 
-            <label>
-              用户名
-              <input value={user} onChange={(e) => setUser(e.target.value)} autoComplete="off" />
-            </label>
-
-            <label>
-              密码
+            <label className="field">
+              <span>{isS3 ? "Secret Access Key" : "密码"}</span>
               <div className="pass-wrap">
                 <input
+                  className="ctl"
                   type={showPass ? "text" : "password"}
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   placeholder={editing ? "留空沿用已保存密码" : ""}
                   autoComplete="new-password"
                 />
-                <label className="check inline">
-                  <input type="checkbox" checked={showPass} onChange={(e) => setShowPass(e.target.checked)} />
-                  显示
-                </label>
+                <button type="button" className="pass-toggle" onClick={() => setShowPass((v) => !v)}>
+                  {showPass ? "隐藏" : "显示"}
+                </button>
               </div>
             </label>
 
-            <label>
-              {win ? "盘符 *" : "挂载点 *"}
+            <label className="field">
+              <span>{win ? "盘符 *" : "挂载点 *"}</span>
               {win ? (
-                <select value={target} onChange={(e) => setTarget(e.target.value)}>
+                <select className="ctl" value={target} onChange={(e) => setTarget(e.target.value)}>
                   {LETTERS.map((l) => (
                     <option key={l} value={`${l}:`}>
                       {l}:
@@ -212,15 +261,22 @@ export default function ConnectionForm({ initial, env, onClose, onSaved }: Props
                   ))}
                 </select>
               ) : (
-                <input value={target} onChange={(e) => setTarget(e.target.value)} placeholder="/mnt/nas" />
+                <input className="ctl" value={target} onChange={(e) => setTarget(e.target.value)} placeholder="/mnt/nas" />
               )}
             </label>
 
-            <label>
-              缓存目录
-              <input value={cacheDir} onChange={(e) => setCacheDir(e.target.value)} placeholder="留空用默认" />
+            <label className="field">
+              <span>缓存目录</span>
+              <input className="ctl" value={cacheDir} onChange={(e) => setCacheDir(e.target.value)} placeholder="留空用默认" />
             </label>
           </div>
+
+          {isS3 && (
+            <p className="tips">
+              Bucket 可留空（挂载后再进目录选），也可以直接填。MinIO 与多数自建网关需要勾选「强制 path-style」，
+              选对应预设会自动设置。
+            </p>
+          )}
 
           {protocol === "webdav" && (
             <p className="tips">
@@ -233,6 +289,12 @@ export default function ConnectionForm({ initial, env, onClose, onSaved }: Props
               <label className="check">
                 <input type="checkbox" checked={ignoreCert} onChange={(e) => setIgnoreCert(e.target.checked)} />
                 忽略证书校验（自签证书必选）
+              </label>
+            )}
+            {isS3 && (
+              <label className="check">
+                <input type="checkbox" checked={pathStyle} onChange={(e) => setPathStyle(e.target.checked)} />
+                强制 path-style（MinIO / 自建网关）
               </label>
             )}
             <label className="check">
@@ -249,25 +311,25 @@ export default function ConnectionForm({ initial, env, onClose, onSaved }: Props
             <summary>高级选项</summary>
             <div className="form-grid">
               {win && (
-                <label>
-                  挂载形态
-                  <select value={networkMode ? "net" : "local"} onChange={(e) => setNetworkMode(e.target.value === "net")}>
+                <label className="field">
+                  <span>挂载形态</span>
+                  <select className="ctl" value={networkMode ? "net" : "local"} onChange={(e) => setNetworkMode(e.target.value === "net")}>
                     <option value="local">本地磁盘</option>
                     <option value="net">网络驱动器</option>
                   </select>
                 </label>
               )}
-              <label>
-                带宽限制
-                <input value={bwlimit} onChange={(e) => setBwlimit(e.target.value)} placeholder="如 10M，留空不限" />
+              <label className="field">
+                <span>带宽限制</span>
+                <input className="ctl" value={bwlimit} onChange={(e) => setBwlimit(e.target.value)} placeholder="如 10M，留空不限" />
               </label>
-              <label>
-                缓存上限
-                <input value={cacheMax} onChange={(e) => setCacheMax(e.target.value)} placeholder="如 10G" />
+              <label className="field">
+                <span>缓存上限</span>
+                <input className="ctl" value={cacheMax} onChange={(e) => setCacheMax(e.target.value)} placeholder="如 10G" />
               </label>
-              <label>
-                HTTP 代理
-                <input value={proxy} onChange={(e) => setProxy(e.target.value)} placeholder="http://127.0.0.1:7890" />
+              <label className="field">
+                <span>HTTP 代理</span>
+                <input className="ctl" value={proxy} onChange={(e) => setProxy(e.target.value)} placeholder="http://127.0.0.1:7890" />
               </label>
               <label className="check wide">
                 <input type="checkbox" checked={readOnly} onChange={(e) => setReadOnly(e.target.checked)} />

@@ -8,41 +8,81 @@ use tauri::AppHandle;
 #[derive(serde::Serialize, Clone, Debug)]
 pub struct EnvInfo {
     pub platform: String,
+    /// 管理器自身版本（来自 Cargo.toml）
+    pub app_version: String,
     pub rclone_path: String,
     pub rclone_version: String,
+    /// bundled / updated / sidecar / env / path
+    pub rclone_source: String,
+    /// 是否用的是安装包内置的 rclone
+    pub rclone_bundled: bool,
     pub fuse_ready: bool,
     pub fuse_hint: String,
+    /// 挂载驱动版本（Windows 上为 WinFsp 版本）
+    pub fuse_version: String,
 }
 
 pub fn env_info(app: &AppHandle) -> EnvInfo {
     let platform = format!("{} {}", std::env::consts::OS, std::env::consts::ARCH);
 
-    let (rclone_path, rclone_version) = match rclone::find_rclone(app) {
-        Some(p) => {
-            let version = std::process::Command::new(&p)
-                .arg("version")
-                .output()
-                .ok()
-                .map(|o| {
-                    String::from_utf8_lossy(&o.stdout)
-                        .lines()
-                        .next()
-                        .unwrap_or("")
-                        .to_string()
-                })
-                .unwrap_or_default();
-            (p.to_string_lossy().to_string(), version)
-        }
-        None => (String::new(), String::new()),
+    let (rclone_path, rclone_version, rclone_source) = match rclone::find_rclone_with_source(app) {
+        Some((p, source)) => (
+            p.to_string_lossy().to_string(),
+            rclone::version_of(&p),
+            source.to_string(),
+        ),
+        None => (String::new(), String::new(), String::new()),
     };
 
     let (fuse_ready, fuse_hint) = check_fuse();
+    let fuse_version = fuse_version();
+
     EnvInfo {
         platform,
+        app_version: env!("CARGO_PKG_VERSION").to_string(),
         rclone_path,
         rclone_version,
+        rclone_bundled: rclone_source == "bundled",
+        rclone_source,
         fuse_ready,
         fuse_hint,
+        fuse_version,
+    }
+}
+
+/// 挂载驱动版本：Windows 读 WinFsp 的卸载项，macOS / Linux 尽力而为
+fn fuse_version() -> String {
+    #[cfg(windows)]
+    {
+        use winreg::enums::{HKEY_LOCAL_MACHINE, KEY_READ};
+        use winreg::RegKey;
+
+        let roots = [
+            r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
+            r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall",
+        ];
+        for root in roots {
+            let Ok(key) = RegKey::predef(HKEY_LOCAL_MACHINE).open_subkey_with_flags(root, KEY_READ) else {
+                continue;
+            };
+            for sub in key.enum_keys().flatten() {
+                let Ok(item) = key.open_subkey_with_flags(&sub, KEY_READ) else {
+                    continue;
+                };
+                let name: String = item.get_value("DisplayName").unwrap_or_default();
+                if name.to_lowercase().contains("winfsp") {
+                    let ver: String = item.get_value("DisplayVersion").unwrap_or_default();
+                    if !ver.is_empty() {
+                        return ver;
+                    }
+                }
+            }
+        }
+        String::new()
+    }
+    #[cfg(not(windows))]
+    {
+        String::new()
     }
 }
 
@@ -102,6 +142,7 @@ pub fn test_connection(
 ) -> DiagResult {
     match conn.protocol {
         Protocol::Webdav => test_webdav(app, conn, plain_password),
+        Protocol::S3 => test_s3(conn),
         _ => test_tcp(conn),
     }
 }
@@ -203,5 +244,46 @@ fn test_tcp(conn: &Connection) -> DiagResult {
             }
         }
         Err(e) => DiagResult::fail(format!("无法解析主机名：{e}"), target),
+    }
+}
+
+/// S3 兼容：先确认 endpoint 可解析、可连通（真实的 AK/SK 校验要等挂载）
+fn test_s3(conn: &Connection) -> DiagResult {
+    let raw = conn.host.trim();
+    let url = if raw.starts_with("http://") || raw.starts_with("https://") {
+        raw.trim_end_matches('/').to_string()
+    } else {
+        format!("https://{}", raw.trim_end_matches('/'))
+    };
+    let host_port = url
+        .trim_start_matches("https://")
+        .trim_start_matches("http://")
+        .to_string();
+    let (host, port) = match host_port.split_once(':') {
+        Some((h, p)) => (h.to_string(), p.parse::<u16>().unwrap_or(if url.starts_with("https") { 443 } else { 80 })),
+        None => (
+            host_port,
+            if url.starts_with("https://") { 443 } else { 80 },
+        ),
+    };
+
+    match (host.as_str(), port).to_socket_addrs() {
+        Ok(mut addrs) => match addrs.next() {
+            Some(sock) => match TcpStream::connect_timeout(&sock, Duration::from_secs(8)) {
+                Ok(_) => DiagResult {
+                    ok: true,
+                    code: None,
+                    message: format!(
+                        "服务地址可达。凭据与存储桶的校验会在挂载时完成（Bucket：{}）",
+                        if conn.path.trim().is_empty() { "未指定" } else { conn.path.trim() }
+                    ),
+                    url,
+                    detail: String::new(),
+                },
+                Err(e) => DiagResult::fail(format!("连接失败：{e}"), url),
+            },
+            None => DiagResult::fail("域名解析结果为空", url),
+        },
+        Err(e) => DiagResult::fail(format!("无法解析主机名：{e}"), url),
     }
 }

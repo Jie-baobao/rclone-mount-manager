@@ -1,9 +1,9 @@
 # Rclone Mount Manager
 
-把 NAS / 网络存储挂成本地盘符的跨平台桌面工具，基于 [rclone](https://rclone.org) 与平台原生 FUSE 驱动。
+把 NAS / 网络存储 / 对象存储挂成本地盘符的跨平台桌面工具，基于 [rclone](https://rclone.org) 与平台原生 FUSE 驱动。
 **没有账号、没有登录、没有广告、不联网验证**——打开就用，断网也能用。
 
-> A cross-platform desktop GUI that mounts SMB / WebDAV / FTP / SFTP as local drives.
+> A cross-platform desktop GUI that mounts SMB / WebDAV / FTP / SFTP / S3 as local drives.
 > Powered by rclone + WinFsp / macFUSE / fuse3. No account, no sign-in, no ads, fully offline.
 
 [![build](https://github.com/Jie-baobao/rclone-mount-manager/actions/workflows/build.yml/badge.svg)](https://github.com/Jie-baobao/rclone-mount-manager/actions/workflows/build.yml)
@@ -26,19 +26,42 @@
 | **Windows 自带 WebDAV 映射** | 单文件 50MB 限制、非标准端口支持差、断线直接卡死资源管理器 |
 | **rclone 本身** | 能力最强，但纯命令行，改个连接要背一串参数 |
 
-这个项目做的事很简单：把 rclone 的能力包一层好用的界面，同时把这些坑都填掉。
+这个项目做的事很简单：把 rclone 的能力包一层好用的界面，把依赖一起打进安装包，同时把这些坑都填掉。
 
 ## 功能
 
 ### 挂载
 
-- **四种协议**：SMB / CIFS、WebDAV、FTP、SFTP
+- **五种后端**：SMB / CIFS、WebDAV、FTP、SFTP、**S3 兼容对象存储**
+- S3 兼容族内置服务商预设：Amazon S3、阿里云 OSS、腾讯云 COS、Cloudflare R2、Backblaze B2、Wasabi、DigitalOcean Spaces、MinIO / 自建
 - 挂成真实盘符（Windows `Z:`）或挂载点（`/mnt/nas`）
 - **本地磁盘 / 网络驱动器**两种形态（Windows）
 - **只读挂载**：给「只看不改」的资料库上把锁
 - **启动时自动挂载**：常用连接开机即挂
 - **断线自动重连**：后台看护线程，指数退避重试（最多 5 次），并记录重连次数
-- **全部挂载 / 全部卸载**：一键批量操作，托盘菜单也能触发
+- **列表行内启停**：不用点进详情，每行右侧直接「启动 / 停止」
+- **全部启动 / 全部停止**：一键批量操作，托盘菜单也能触发
+
+### 状态一眼看清
+
+列表每个连接前面有个状态圆点，四种颜色对应四种状态：
+
+| 颜色 | 含义 |
+|---|---|
+| 🟢 绿 | 已挂载，探测正常 |
+| 🟡 黄 | 已挂载，但延迟偏高 / 网络波动 / 探测超时 |
+| 🔴 红 | 进程退出、认证失败、连续探测失败，当前不可用 |
+| ⚪ 灰 | 已停止 |
+
+黄色不是猜的：后台每 15 秒对已挂载连接跑一次轻量探测（`rclone lsd --max-depth 0`，超时 8 秒），
+往返超过 1.2 秒或连续 2 次超时变黄，连续 3 次失败变红。
+
+### 依赖自带，装完即用
+
+- **rclone 内置在安装包里**，不用自己下载、不用配 PATH
+- **WinFsp 驱动**（Windows 挂盘符必需）随包附带，可在「版本与依赖」里一键安装 / 升级
+- 「版本与依赖」面板显示管理器、rclone、WinFsp 的当前版本与来源，可一键检查更新
+- rclone 更新会解压到应用配置目录，**优先于内置版本**，升级不需要重装应用
 
 ### 性能与网络
 
@@ -64,12 +87,16 @@
 - 中文界面，跟随系统深浅色
 - 系统托盘常驻：显示主窗口 / 全部挂载 / 全部卸载 / 退出；关窗口 = 收进托盘
 - 开机自启动（Windows 注册表 / macOS LaunchAgent / Linux autostart）
-- 连接置顶、搜索过滤、`Ctrl+N` 新建、`Ctrl+R` 刷新
+- 连接置顶、搜索过滤（名称 / 地址 / 盘符 / 用户名）、`Ctrl+N` 新建、`Ctrl+R` 刷新
 - 挂载日志实时刷新（挂载中每 4 秒）
 
 <table>
 <tr>
 <td><img src="docs/screenshots/new-connection.png" alt="新建连接"></td>
+<td><img src="docs/screenshots/s3-form.png" alt="S3 兼容对象存储"></td>
+</tr>
+<tr>
+<td><img src="docs/screenshots/about.png" alt="版本与依赖"></td>
 <td><img src="docs/screenshots/main-dark.png" alt="深色模式"></td>
 </tr>
 </table>
@@ -79,42 +106,48 @@
 | | Windows | macOS | Linux |
 |---|---|---|---|
 | 界面 / 配置 / 日志 | ✅ | ✅ | ✅ |
-| 挂载驱动 | WinFsp | macFUSE / FUSE-T | fuse3 |
+| 挂载驱动 | WinFsp（随包） | macFUSE / FUSE-T | fuse3 |
 | 目标形式 | 盘符 `Z:` | 挂载点 | 挂载点 |
+| rclone | 内置 | 内置 | 内置 |
 | 自启动 | ✅ 注册表 | ✅ LaunchAgent | ✅ .desktop |
 | 托盘 | ✅ | ✅ | ✅ |
 | 状态 | 已实测 | 代码就绪，待实机验证 | 代码就绪，待实机验证 |
 
 ## 安装
 
-### 1. 前置依赖
-
-所有平台都需要 **[rclone](https://rclone.org/downloads/)**：装到 `PATH`，或把可执行文件放到本程序同目录（程序会优先找同目录）。
-
-| 平台 | 额外依赖 |
-|---|---|
-| Windows | [WinFsp](https://winfsp.dev/rel/) |
-| macOS | `brew install --cask macfuse`（或 `fuse-t`） |
-| Linux | `sudo apt install fuse3` / `sudo dnf install fuse3` |
-
-程序启动时会在左下角显示驱动与 rclone 检测结果，缺什么一眼能看到。
-
-### 2. 安装包
+### 1. 安装包
 
 从 [Releases](https://github.com/Jie-baobao/rclone-mount-manager/releases) 下载：
 
 - Windows：`.msi` / `.exe`
 - macOS：`.dmg`
-- Linux：`.AppImage` / `.deb`
+- Linux：`.AppImage` / `.deb` / `.rpm`
+
+**rclone 已内置，不需要另外安装。**
+
+### 2. 挂载驱动
+
+| 平台 | 说明 |
+|---|---|
+| Windows | 安装包里带了 WinFsp 安装程序。没装过时，打开「版本与依赖」点「一键安装」（会弹一次管理员授权） |
+| macOS | `brew install --cask macfuse`（或 `fuse-t`），首次需在「系统设置 → 隐私与安全性」里允许系统扩展 |
+| Linux | `sudo apt install fuse3` / `sudo dnf install fuse3` |
+
+程序启动时左下角会显示环境自检结果；点它打开「版本与依赖」面板，缺什么一眼能看到，也能直接装。
 
 ### 3. 从源码构建
 
-需要 **Node 18+**、**Rust 1.77+**；Windows 还需要 **Microsoft C++ Build Tools**（Tauri 编译依赖，`cl`/`link.exe`）。
+需要 **Node 18+**、**Rust 1.77+**；Windows 还需要 **Microsoft C++ Build Tools**。
 
 ```bash
 git clone https://github.com/Jie-baobao/rclone-mount-manager.git
 cd rclone-mount-manager
 npm install
+
+# 可选：把 rclone 放进 resources，构建出的包才自带 rclone
+#   下载 https://downloads.rclone.org/ 对应平台压缩包，解出 rclone(.exe)
+#   放到 src-tauri/resources/rclone/
+
 npm run tauri build       # 产物在 src-tauri/target/release/bundle/
 ```
 
@@ -138,31 +171,33 @@ node scripts/shot.mjs             # 输出到 docs/screenshots/
 1. 点「新建连接」，选协议
 2. 填地址 / 端口 / 账号密码 —— 先点「测试连接」验一遍
 3. 选盘符（或挂载点），保存
-4. 点「挂载」，资源管理器里就出现了
+4. 点「启动」，资源管理器里就出现了；之后在列表里直接点「启动 / 停止」即可
 
 ## 常见坑
 
 这些都是真实踩过的，写在最前面：
 
 - **漏写端口**：不少 NAS 的 WebDAV 走非标准端口（如 `5005` / `5006`）。只填主机名会落到 80 端口的反向代理上，返回一段 HTML，客户端就报「XML 语法错误」之类的怪错。本工具会自动补端口，但显式填上更稳。
-- **密码里的 `!` 被输入法打成全角 `！`**：屏幕上几乎看不出差别，但服务端一定返回 `401`，客户端还会无限弹密码框。用「显示密码」核对一次就能发现。
+- **密码里的 `!` 被输入法打成全角 `！`**：屏幕上几乎看不出差别，但服务端一定返回 `401`，客户端还会无限弹密码框。用「显示」核对一次就能发现。
 - **自签证书**：HTTPS 的 WebDAV 如果是自签证书，必须勾「忽略证书校验」。
 - **SMB 共享名不能省**：`\\NAS\share` 里的 `share` 是必填的，只填 IP 挂不上。
+- **S3 与服务商不匹配**：MinIO 和多数自建网关要勾「强制 path-style」，选对应预设会自动设置；区域填错会报签名错误。
 - **Windows 上盘符冲突**：选一个没被占用的盘符。
 
 ## 工作原理
 
 ```
 ┌─────────────────────────────┐
-│  前端  React + TypeScript   │  连接列表 / 向导 / 日志 / 状态
+│  前端  React + TypeScript   │  连接列表 / 向导 / 日志 / 版本面板
 └──────────────┬──────────────┘
                │ Tauri IPC（命令 + 事件）
 ┌──────────────▼──────────────┐
 │  后端  Rust                 │
-│  ├ store.rs    配置读写（原子写 + .bak）      │
-│  ├ rclone.rs   conf 生成 / obscure / 挂载参数 │
-│  ├ diag.rs     PROPFIND 诊断 / 驱动检测       │
-│  └ autostart.rs 三平台自启动                  │
+│  ├ store.rs    配置读写（原子写 + .bak）        │
+│  ├ rclone.rs   conf 生成 / obscure / 挂载参数   │
+│  ├ diag.rs     PROPFIND 诊断 / 驱动检测         │
+│  ├ update.rs   版本检查 / 下载安装 rclone 与驱动 │
+│  └ autostart.rs 三平台自启动                    │
 └──────────────┬──────────────┘
                │ 子进程
         ┌──────▼──────┐
@@ -172,6 +207,7 @@ node scripts/shot.mjs             # 输出到 docs/screenshots/
 
 - 每个连接对应一个 `rclone mount` 子进程，句柄由后端持有
 - 后台看护线程每 5 秒检查一次存活，意外退出按 `2s → 5s → 8s → 11s → 14s` 退避重连
+- 健康探测线程每 15 秒对已挂载连接做一次轻量请求，得出绿 / 黄 / 红
 - 状态变化通过 Tauri 事件推给前端，另有 8 秒兜底轮询
 - 关闭窗口 = 收进托盘；从托盘「退出」才会停掉所有挂载
 
@@ -185,15 +221,17 @@ node scripts/shot.mjs             # 输出到 docs/screenshots/
 
 - `connections.json` — 连接列表（不含密码）
 - `rclone.conf` — rclone 远程配置（密码已 obscure）
+- `bin/rclone(.exe)` — 手动更新过的 rclone（优先于内置版本）
 - `logs/mount-<id>.log` — 每个连接的挂载日志
 
 ## 路线图
 
+- [x] 随包附带 rclone 二进制，免手动安装
+- [x] S3 兼容对象存储
+- [ ] 更多云盘后端（Google Drive / OneDrive / Dropbox，需要 OAuth 授权流程）
 - [ ] macOS / Linux 实机验证与打包签名
-- [ ] 更多云存储后端（S3、WebDAV 之外的对象存储）
 - [ ] 系统文件管理器右键菜单集成
 - [ ] 多语言（English / 简体中文）
-- [ ] 随包附带 rclone 二进制，免手动安装
 - [ ] 连接配置导入 / 导出
 - [ ] 带宽与流量的可视化统计
 

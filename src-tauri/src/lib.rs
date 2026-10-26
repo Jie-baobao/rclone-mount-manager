@@ -3,6 +3,7 @@ mod diag;
 mod model;
 mod rclone;
 mod store;
+mod update;
 
 use model::{Connection, ConnectionInput, DiagResult, MountState, Protocol};
 use std::collections::HashMap;
@@ -21,10 +22,34 @@ pub struct Session {
     restarts: u32,
 }
 
+/// 一次健康探测的结果
+#[derive(Clone, Debug)]
+pub struct Health {
+    /// healthy / slow / error
+    pub state: &'static str,
+    pub latency_ms: Option<u64>,
+    pub last_check: i64,
+    /// 连续失败次数：1~2 次算「波动」，3 次以上才算「故障」
+    pub fails: u32,
+}
+
+impl Default for Health {
+    fn default() -> Self {
+        Self {
+            state: "healthy",
+            latency_ms: None,
+            last_check: 0,
+            fails: 0,
+        }
+    }
+}
+
 pub struct AppState {
     sessions: Mutex<HashMap<String, Session>>,
     /// 每个连接最近一次失败原因（挂载日志尾部）
     errors: Mutex<HashMap<String, String>>,
+    /// 每个已挂载连接的健康状况（主动探测得来）
+    health: Mutex<HashMap<String, Health>>,
     /// 托盘是否创建成功：成功时关闭窗口改为"隐藏到托盘"
     tray_ready: AtomicBool,
 }
@@ -34,6 +59,7 @@ impl Default for AppState {
         Self {
             sessions: Mutex::new(HashMap::new()),
             errors: Mutex::new(HashMap::new()),
+            health: Mutex::new(HashMap::new()),
             tray_ready: AtomicBool::new(false),
         }
     }
@@ -76,6 +102,13 @@ fn to_connection(input: &ConnectionInput, existing: Option<&Connection>) -> Conn
         target: input.target.trim().to_string(),
         cache_dir: input.cache_dir.trim().to_string(),
         ignore_cert: input.ignore_cert,
+        s3_provider: if input.s3_provider.trim().is_empty() {
+            "Other".to_string()
+        } else {
+            input.s3_provider.trim().to_string()
+        },
+        region: input.region.trim().to_string(),
+        s3_path_style: input.s3_path_style,
         read_only: input.read_only,
         network_mode: input.network_mode,
         bwlimit: input.bwlimit.trim().to_string(),
@@ -103,6 +136,7 @@ fn start_session(app: &AppHandle, state: &AppState, conn: &Connection, restarts:
         },
     );
     state.errors.lock().unwrap().remove(&conn.id);
+    state.health.lock().unwrap().insert(conn.id.clone(), Health::default());
     Ok(pid)
 }
 
@@ -181,6 +215,7 @@ fn delete_connection(app: AppHandle, state: State<'_, AppState>, id: String) -> 
         let _ = rclone::unmount(&mut session.child, "");
     }
     state.errors.lock().unwrap().remove(&id);
+    state.health.lock().unwrap().remove(&id);
     let mut list = store::load_connections(&app);
     list.retain(|c| c.id != id);
     store::save_connections(&app, &list)?;
@@ -242,6 +277,7 @@ fn unmount(app: AppHandle, state: State<'_, AppState>, id: String) -> Result<(),
         .unwrap_or_default();
     rclone::unmount(&mut session.child, &target)?;
     state.errors.lock().unwrap().remove(&id);
+    state.health.lock().unwrap().remove(&id);
     let _ = app.emit("state-changed", ());
     Ok(())
 }
@@ -283,9 +319,22 @@ fn unmount_all(app: AppHandle, state: State<'_, AppState>) -> Result<usize, Stri
 fn state_snapshot(app: &AppHandle, state: &AppState, conn: &Connection) -> MountState {
     let map = state.sessions.lock().unwrap();
     let session = map.get(&conn.id);
+    let health = state.health.lock().unwrap().get(&conn.id).cloned();
+    let mounted = session.is_some();
+    let health_state = health
+        .as_ref()
+        .map(|h| h.state.to_string())
+        .unwrap_or_else(|| "healthy".into());
+    let latency_ms = if mounted {
+        health.as_ref().and_then(|h| h.latency_ms)
+    } else {
+        None
+    };
+    let last_check = health.as_ref().map(|h| h.last_check);
+
     MountState {
         id: conn.id.clone(),
-        mounted: session.is_some(),
+        mounted,
         pid: session.map(|s| s.child.id()),
         since: session.map(|s| s.started.elapsed().as_secs()),
         restarts: session.map(|s| s.restarts).unwrap_or(0),
@@ -293,6 +342,9 @@ fn state_snapshot(app: &AppHandle, state: &AppState, conn: &Connection) -> Mount
         log_path: store::mount_log_path(app, &conn.id)
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_default(),
+        health: if mounted { health_state } else { "stopped".into() },
+        latency_ms,
+        last_check,
     }
 }
 
@@ -356,6 +408,32 @@ fn get_autostart() -> bool {
 #[tauri::command]
 fn set_autostart(enable: bool) -> Result<(), String> {
     autostart::set_enabled(enable)
+}
+
+#[tauri::command]
+async fn check_updates(app: AppHandle) -> Result<update::UpdateReport, String> {
+    tauri::async_runtime::spawn_blocking(move || update::check(&app))
+        .await
+        .map_err(|e| format!("检查更新失败：{e}"))
+}
+
+#[tauri::command]
+async fn install_rclone(app: AppHandle, version: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || update::install_rclone(&app, &version))
+        .await
+        .map_err(|e| format!("安装失败：{e}"))?
+}
+
+#[tauri::command]
+async fn install_winfsp(app: AppHandle) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || update::install_winfsp(&app))
+        .await
+        .map_err(|e| format!("安装失败：{e}"))?
+}
+
+#[tauri::command]
+fn open_url(url: String) -> Result<(), String> {
+    update::open_url(&url)
 }
 
 /// 连接测试放到阻塞线程池里跑，避免 15 秒超时把界面卡住
@@ -441,6 +519,65 @@ fn spawn_supervisor(app: AppHandle) {
     });
 }
 
+/// 每 15 秒对已挂载连接做一次轻量探测，把「网络波动」变成看得见的黄灯。
+fn spawn_health_monitor(app: AppHandle) {
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_secs(8));
+        loop {
+            std::thread::sleep(Duration::from_secs(15));
+
+            let state = app.state::<AppState>();
+            let ids: Vec<String> = state.sessions.lock().unwrap().keys().cloned().collect();
+            if ids.is_empty() {
+                continue;
+            }
+            let conns = store::load_connections(&app);
+            let mut changed = false;
+
+            for id in ids {
+                let Some(conn) = conns.iter().find(|c| c.id == id) else {
+                    continue;
+                };
+                let result = rclone::probe_latency(&app, conn, 8);
+                let now = now_secs();
+
+                let mut guard = state.health.lock().unwrap();
+                let entry = guard.entry(id.clone()).or_default();
+                let before = (entry.state, entry.latency_ms);
+
+                match result {
+                    Ok(ms) => {
+                        entry.fails = 0;
+                        entry.latency_ms = Some(ms);
+                        entry.state = if ms > 1200 { "slow" } else { "healthy" };
+                    }
+                    Err(e) => {
+                        entry.fails = entry.fails.saturating_add(1);
+                        // 偶发超时只算波动（黄），连续 3 次才判定故障（红）
+                        entry.state = if entry.fails >= 3 { "error" } else { "slow" };
+                        entry.latency_ms = None;
+                        if entry.fails >= 3 {
+                            state
+                                .errors
+                                .lock()
+                                .unwrap()
+                                .insert(id.clone(), format!("连接探测失败：{e}"));
+                        }
+                    }
+                }
+                entry.last_check = now;
+                if before != (entry.state, entry.latency_ms) {
+                    changed = true;
+                }
+            }
+
+            if changed {
+                let _ = app.emit("state-changed", ());
+            }
+        }
+    });
+}
+
 fn build_tray(app: &tauri::App) -> tauri::Result<()> {
     let show = MenuItem::with_id(app, "show", "显示主窗口", true, None::<&str>)?;
     let mount_all = MenuItem::with_id(app, "mount_all", "全部挂载", true, None::<&str>)?;
@@ -488,7 +625,8 @@ pub fn run() {
             let _ = build_tray(app);
 
             let handle = app.handle().clone();
-            spawn_supervisor(handle);
+            spawn_supervisor(handle.clone());
+            spawn_health_monitor(handle);
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -516,7 +654,11 @@ pub fn run() {
             open_target,
             get_autostart,
             set_autostart,
-            test_connection
+            test_connection,
+            check_updates,
+            install_rclone,
+            install_winfsp,
+            open_url
         ])
         .build(tauri::generate_context!())
         .expect("Tauri 应用构建失败")

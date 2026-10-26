@@ -1,9 +1,10 @@
 use crate::model::{Connection, Protocol};
 use crate::store;
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
 
 /// rclone 远程名统一加前缀，避免和用户自己的 remote 冲突
 pub fn remote_name(id: &str) -> String {
@@ -16,12 +17,35 @@ pub fn remote_name(id: &str) -> String {
 /// 3. 应用配置目录下的 bin/
 /// 4. 系统 PATH
 pub fn find_rclone(app: &AppHandle) -> Option<PathBuf> {
+    candidates(app).into_iter().next().map(|(p, _)| p)
+}
+
+/// rclone 的来源，界面上要区分「内置 / 用户更新过 / 系统装的」
+pub fn find_rclone_with_source(app: &AppHandle) -> Option<(PathBuf, &'static str)> {
+    candidates(app).into_iter().next()
+}
+
+/// 按优先级列出所有可能的 rclone 位置：
+/// 1. 环境变量 RCLONE_PATH（用户显式指定，最高优先级）
+/// 2. 应用配置目录 bin/（用户点「更新」后放这里的版本，优先于内置版本）
+/// 3. 本程序同目录 / bin 子目录（便携用法）
+/// 4. 安装包内置的 resources 目录
+/// 5. 系统 PATH
+fn candidates(app: &AppHandle) -> Vec<(PathBuf, &'static str)> {
     let exe = if cfg!(windows) { "rclone.exe" } else { "rclone" };
+    let mut out: Vec<(PathBuf, &'static str)> = Vec::new();
 
     if let Ok(p) = std::env::var("RCLONE_PATH") {
         let p = PathBuf::from(p);
         if p.is_file() {
-            return Some(p);
+            out.push((p, "env"));
+        }
+    }
+
+    if let Ok(dir) = store::config_dir(app) {
+        let cand = dir.join("bin").join(exe);
+        if cand.is_file() {
+            out.push((cand, "updated"));
         }
     }
 
@@ -29,30 +53,34 @@ pub fn find_rclone(app: &AppHandle) -> Option<PathBuf> {
         if let Some(dir) = cur.parent() {
             for cand in [dir.join(exe), dir.join("bin").join(exe)] {
                 if cand.is_file() {
-                    return Some(cand);
+                    out.push((cand, "sidecar"));
                 }
             }
         }
     }
 
-    if let Ok(dir) = store::config_dir(app) {
-        let cand = dir.join("bin").join(exe);
-        if cand.is_file() {
-            return Some(cand);
-        }
-    }
-
-    // PATH 里找
-    if let Ok(paths) = std::env::var("PATH") {
-        for dir in std::env::split_paths(&paths) {
-            let cand = dir.join(exe);
+    // 安装包内置的 rclone（Tauri 会把 resources 原样复制进去）
+    if let Ok(res) = app.path().resource_dir() {
+        for cand in [
+            res.join("resources").join("rclone").join(exe),
+            res.join("rclone").join(exe),
+        ] {
             if cand.is_file() {
-                return Some(cand);
+                out.push((cand, "bundled"));
             }
         }
     }
 
-    None
+    if let Ok(paths) = std::env::var("PATH") {
+        for dir in std::env::split_paths(&paths) {
+            let cand = dir.join(exe);
+            if cand.is_file() {
+                out.push((cand, "path"));
+            }
+        }
+    }
+
+    out
 }
 
 pub fn require_rclone(app: &AppHandle) -> Result<PathBuf, String> {
@@ -151,7 +179,7 @@ pub fn upsert_remote(
             }
         }
         if skipping {
-            if trimmed.starts_with("pass =") {
+            if trimmed.starts_with("pass =") || trimmed.starts_with("secret_access_key =") {
                 old_pass = Some(trimmed.to_string());
             }
             continue;
@@ -167,6 +195,44 @@ pub fn upsert_remote(
     body.push(format!("type = {}", conn.protocol.as_rclone_type()));
 
     match conn.protocol {
+        Protocol::S3 => {
+            let provider = if conn.s3_provider.trim().is_empty() {
+                "Other".to_string()
+            } else {
+                conn.s3_provider.trim().to_string()
+            };
+            body.push(format!("provider = {provider}"));
+            let endpoint = conn.host.trim().trim_end_matches('/');
+            if !endpoint.is_empty() {
+                body.push(format!("endpoint = {endpoint}"));
+            }
+            if !conn.region.trim().is_empty() {
+                body.push(format!("region = {}", conn.region.trim()));
+            }
+            if conn.s3_path_style {
+                body.push("force_path_style = true".into());
+            }
+            if !conn.user.is_empty() {
+                body.push(format!("access_key_id = {}", conn.user));
+            }
+            match plain_password {
+                Some(p) if !p.is_empty() => {
+                    body.push(format!("secret_access_key = {}", obscure(app, p)?))
+                }
+                _ => {
+                    if let Some(keep) = &old_pass {
+                        body.push(keep.clone());
+                    }
+                }
+            }
+            let mut text = kept.join("\n");
+            if !text.is_empty() {
+                text.push_str("\n\n");
+            }
+            text.push_str(&body.join("\n"));
+            text.push('\n');
+            return store::write_atomic(&conf_path, &text);
+        }
         Protocol::Webdav => {
             body.push(format!(
                 "url = {}",
@@ -188,7 +254,7 @@ pub fn upsert_remote(
         }
     }
 
-    if !conn.user.is_empty() {
+    if !conn.user.is_empty() && !conn.protocol.is_s3() {
         body.push(format!("user = {}", conn.user));
     }
     if let Some(pass) = plain_password {
@@ -241,9 +307,17 @@ pub fn build_mount_args(
     log_path: &Path,
 ) -> Result<Vec<String>, String> {
     let conf = store::rclone_conf_path(app)?;
+    let mut spec = format!("{}:", remote_name(&conn.id));
+    if conn.protocol.is_s3() {
+        let bucket = conn.path.trim().trim_matches('/');
+        if !bucket.is_empty() {
+            spec = format!("{}:{}", remote_name(&conn.id), bucket);
+        }
+    }
+
     let mut args: Vec<String> = vec![
         "mount".into(),
-        format!("{}:", remote_name(&conn.id)),
+        spec,
         conn.target.clone(),
         "--config".into(),
         conf.to_string_lossy().to_string(),
@@ -412,6 +486,29 @@ pub fn reveal_password(app: &AppHandle, id: &str) -> Option<String> {
     Some(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
+/// 读取 rclone 版本号（取 `rclone version` 第一行里的 vX.Y.Z）
+pub fn version_of(rclone: &Path) -> String {
+    command_for(rclone)
+        .arg("version")
+        .output()
+        .ok()
+        .map(|o| {
+            let first = String::from_utf8_lossy(&o.stdout)
+                .lines()
+                .next()
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            first
+                .split_whitespace()
+                .find(|w| w.starts_with('v'))
+                .unwrap_or("")
+                .trim_start_matches('v')
+                .to_string()
+        })
+        .unwrap_or_default()
+}
+
 /// 读取日志尾部，供 UI 展示真实错误
 pub fn tail_log(path: &Path, max_lines: usize) -> String {
     let Ok(text) = fs::read_to_string(path) else {
@@ -420,4 +517,82 @@ pub fn tail_log(path: &Path, max_lines: usize) -> String {
     let lines: Vec<&str> = text.lines().collect();
     let start = lines.len().saturating_sub(max_lines);
     lines[start..].join("\n")
+}
+
+/// 对一条连接做一次轻量探测，返回往返毫秒数。
+///
+/// 用 `rclone lsd --max-depth 0` 而不是 ping：走的是真实协议栈，
+/// 能同时反映「网络慢」和「认证被拒 / 服务端异常」两种情况。
+pub fn probe_latency(app: &AppHandle, conn: &Connection, timeout_secs: u64) -> Result<u64, String> {
+    let rclone = find_rclone(app).ok_or_else(|| "未找到 rclone".to_string())?;
+    let conf = store::rclone_conf_path(app)?;
+
+    let mut spec = format!("{}:", remote_name(&conn.id));
+    if conn.protocol.is_s3() {
+        let bucket = conn.path.trim().trim_matches('/');
+        if !bucket.is_empty() {
+            spec = format!("{}:{}", remote_name(&conn.id), bucket);
+        }
+    }
+
+    let mut cmd = command_for(&rclone);
+    cmd.arg("lsd")
+        .arg(&spec)
+        .arg("--max-depth")
+        .arg("0")
+        .arg("--config")
+        .arg(conf.to_string_lossy().to_string())
+        .arg("--timeout")
+        .arg(format!("{timeout_secs}s"))
+        .arg("--contimeout")
+        .arg(format!("{timeout_secs}s"))
+        .arg("--retries")
+        .arg("1")
+        .arg("--low-level-retries")
+        .arg("1")
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .stdin(Stdio::null());
+
+    let proxy = conn.proxy.trim();
+    if !proxy.is_empty() {
+        for key in ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"] {
+            cmd.env(key, proxy);
+        }
+    }
+
+    let started = std::time::Instant::now();
+    let mut child = cmd.spawn().map_err(|e| format!("探测失败：{e}"))?;
+    let deadline = std::time::Duration::from_secs(timeout_secs + 2);
+
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                if status.success() {
+                    return Ok(started.elapsed().as_millis() as u64);
+                }
+                let mut buf = String::new();
+                if let Some(mut err) = child.stderr.take() {
+                    let _ = err.read_to_string(&mut buf);
+                }
+                let line = buf
+                    .lines()
+                    .rev()
+                    .find(|l| !l.trim().is_empty())
+                    .unwrap_or("探测失败")
+                    .trim()
+                    .to_string();
+                return Err(line);
+            }
+            Ok(None) => {
+                if started.elapsed() > deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err("探测超时".into());
+                }
+                std::thread::sleep(std::time::Duration::from_millis(120));
+            }
+            Err(e) => return Err(format!("探测失败：{e}")),
+        }
+    }
 }

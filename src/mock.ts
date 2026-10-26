@@ -20,6 +20,9 @@ const conns: Connection[] = [
     target: "Z:",
     cache_dir: "",
     ignore_cert: false,
+    s3_provider: "Other",
+    region: "",
+    s3_path_style: false,
     read_only: false,
     network_mode: false,
     bwlimit: "",
@@ -41,6 +44,9 @@ const conns: Connection[] = [
     target: "Y:",
     cache_dir: "",
     ignore_cert: false,
+    s3_provider: "Other",
+    region: "",
+    s3_path_style: false,
     read_only: true,
     network_mode: true,
     bwlimit: "20M",
@@ -53,20 +59,23 @@ const conns: Connection[] = [
   },
   {
     id: "a3",
-    name: "备份服务器",
-    protocol: "sftp",
-    host: "backup.example.com",
-    port: 22,
-    path: "data",
-    user: "root",
+    name: "对象存储备份",
+    protocol: "s3",
+    host: "s3.example.com",
+    port: 443,
+    path: "backup",
+    user: "AKIAEXAMPLE",
     target: "X:",
     cache_dir: "",
     ignore_cert: false,
+    s3_provider: "Other",
+    region: "us-east-1",
+    s3_path_style: true,
     read_only: false,
     network_mode: false,
     bwlimit: "",
     cache_max_size: "10G",
-    proxy: "http://127.0.0.1:7890",
+    proxy: "",
     reconnect: false,
     auto_mount: false,
     pinned: false,
@@ -83,6 +92,9 @@ const states: Record<string, MountState> = {
     restarts: 0,
     last_error: null,
     log_path: "",
+    health: "healthy",
+    latency_ms: 42,
+    last_check: now - 6,
   },
   a2: {
     id: "a2",
@@ -92,8 +104,22 @@ const states: Record<string, MountState> = {
     restarts: 1,
     last_error: "2026/10/26 15:41:02 ERROR : SMB: login failed: STATUS_LOGON_FAILURE",
     log_path: "",
+    health: "stopped",
+    latency_ms: null,
+    last_check: null,
   },
-  a3: { id: "a3", mounted: false, pid: null, since: null, restarts: 0, last_error: null, log_path: "" },
+  a3: {
+    id: "a3",
+    mounted: false,
+    pid: null,
+    since: null,
+    restarts: 0,
+    last_error: null,
+    log_path: "",
+    health: "stopped",
+    latency_ms: null,
+    last_check: null,
+  },
 };
 
 const LOG = `2026/10/26 15:32:11 INFO  : Using config file from config/rclone.conf
@@ -113,27 +139,90 @@ function reply(cmd: string, args?: Record<string, unknown>): unknown {
     case "get_env":
       return {
         platform: "windows x86_64",
-        rclone_path: "C:\\Program Files\\Rclone\\rclone.exe",
-        rclone_version: "rclone v1.75.2",
+        app_version: "0.2.0",
+        rclone_path: "C:\\Program Files\\Rclone Mount Manager\\resources\\rclone\\rclone.exe",
+        rclone_version: "1.75.2",
+        rclone_source: "bundled",
+        rclone_bundled: true,
         fuse_ready: true,
         fuse_hint: "WinFsp 已就绪",
+        fuse_version: "2.0.23075",
       } satisfies EnvInfo;
     case "list_connections":
       return list;
     case "mount_states":
-      return list.map((c) => states[c.id] ?? { id: c.id, mounted: false, pid: null, since: null, restarts: 0, last_error: null, log_path: "" });
+      return list.map(
+        (c) =>
+          states[c.id] ?? {
+            id: c.id,
+            mounted: false,
+            pid: null,
+            since: null,
+            restarts: 0,
+            last_error: null,
+            log_path: "",
+            health: "stopped",
+            latency_ms: null,
+            last_check: null,
+          }
+      );
     case "read_log":
       return LOG;
     case "get_autostart":
       return true;
+    case "check_updates":
+      return {
+        items: [
+          {
+            name: "管理器",
+            current: "0.2.0",
+            latest: "0.2.0",
+            has_update: false,
+            url: "https://github.com/Jie-baobao/rclone-mount-manager/releases",
+            note: "",
+          },
+          {
+            name: "rclone",
+            current: "1.75.2",
+            latest: "1.75.2",
+            has_update: false,
+            url: "https://rclone.org/downloads/",
+            note: "",
+          },
+          {
+            name: "WinFsp",
+            current: "2.0.23075",
+            latest: "2.1",
+            has_update: true,
+            url: "https://winfsp.dev/rel/",
+            note: "",
+          },
+        ],
+      };
+    case "install_rclone":
+      return "1.75.2";
+    case "install_winfsp":
+      return "WinFsp 安装完成";
     case "set_autostart":
     case "set_pinned":
     case "unmount":
     case "open_target":
+    case "open_url":
     case "delete_connection":
       return null;
     case "mount":
-      return { id: (args?.id as string) ?? "", mounted: true, pid: 1, since: 0, restarts: 0, last_error: null, log_path: "" };
+      return {
+        id: (args?.id as string) ?? "",
+        mounted: true,
+        pid: 1,
+        since: 0,
+        restarts: 0,
+        last_error: null,
+        log_path: "",
+        health: "healthy",
+        latency_ms: 38,
+        last_check: now,
+      } satisfies MountState;
     case "mount_all":
       return 1;
     case "unmount_all":
@@ -142,11 +231,9 @@ function reply(cmd: string, args?: Record<string, unknown>): unknown {
       return "";
     case "save_connection": {
       const input = args?.input as ConnectionInput;
+      const existing = list.find((c) => c.id === input.id);
       const saved: Connection = {
-        ...(list.find((c) => c.id === input.id) ?? ({
-          id: String(Date.now()),
-          created_at: Math.floor(Date.now() / 1000),
-        } as Connection)),
+        ...(existing ?? ({ id: String(Date.now()), created_at: Math.floor(Date.now() / 1000) } as Connection)),
         ...input,
         id: input.id ?? String(Date.now()),
         password: undefined,
@@ -158,13 +245,20 @@ function reply(cmd: string, args?: Record<string, unknown>): unknown {
     }
     case "test_connection": {
       const input = args?.input as ConnectionInput;
-      const ok = input.protocol === "webdav";
+      const ok = input.protocol === "webdav" || input.protocol === "s3";
       return {
         ok,
-        code: ok ? 207 : null,
-        message: ok ? "认证通过，WebDAV 服务正常" : "端口连接失败：拒绝连接 (os error 10061)",
-        url: `http://${input.host}:${input.port}/`,
-        detail: ok ? "WWW-Authenticate: Basic realm=\"Restricted\"" : "",
+        code: input.protocol === "webdav" ? 207 : null,
+        message: ok
+          ? input.protocol === "s3"
+            ? "服务地址可达。凭据与存储桶的校验会在挂载时完成（Bucket：backup）"
+            : "认证通过，WebDAV 服务正常"
+          : "端口连接失败：拒绝连接 (os error 10061)",
+        url:
+          input.protocol === "s3"
+            ? `https://${input.host}`
+            : `http://${input.host}:${input.port}/`,
+        detail: ok ? 'WWW-Authenticate: Basic realm="Restricted"' : "",
       } satisfies DiagResult;
     }
     default:

@@ -1,6 +1,6 @@
 [package]
 name = "rclone-mount-manager"
-version = "0.1.0"
+version = "0.2.0"
 description = "Cross-platform GUI to mount SMB / WebDAV / FTP / SFTP as local drives via rclone + WinFsp / macFUSE / FUSE"
 authors = ["rclone-mount-manager contributors"]
 edition = "2021"
@@ -21,6 +21,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
 base64 = "0.22"
+zip = { version = "2", default-features = false, features = ["deflate"] }
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.52"
