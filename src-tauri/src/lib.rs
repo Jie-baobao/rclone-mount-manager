@@ -174,6 +174,9 @@ fn to_connection(input: &ConnectionInput, existing: Option<&Connection>) -> Conn
 fn start_session(app: &AppHandle, state: &AppState, conn: &Connection, restarts: u32) -> Result<u32, String> {
     let log_path = store::mount_log_path(app, &conn.id)?;
     let _ = std::fs::write(&log_path, "");
+    // 每次启动都按连接信息重写一遍 remote：老版本写坏的配置（例如把 WebDAV 地址拼成
+    // http://5005//192.168.50.4）不用用户重新编辑连接就能自愈。密码沿用已有值。
+    let _ = rclone::upsert_remote(app, conn, None);
     let child = rclone::spawn_mount(app, conn, &log_path)?;
     let pid = child.id();
     state.sessions.lock().unwrap().insert(
