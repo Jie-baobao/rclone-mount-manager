@@ -162,6 +162,33 @@ pub fn upsert_remote(
     conn: &Connection,
     plain_password: Option<&str>,
 ) -> Result<(), String> {
+    write_remote(app, conn, PasswordSource::Plain(plain_password))
+}
+
+/// 导入连接配置时用：密码已经是 rclone obscure 过的字符串，直接落盘即可。
+pub fn upsert_remote_obscured(
+    app: &AppHandle,
+    conn: &Connection,
+    obscured: Option<&str>,
+) -> Result<(), String> {
+    write_remote(app, conn, PasswordSource::Obscured(obscured))
+}
+
+/// 密码来源：明文（需先 obscure）或已混淆（导入时直接写）。
+enum PasswordSource<'a> {
+    Plain(Option<&'a str>),
+    Obscured(Option<&'a str>),
+}
+
+fn write_remote(
+    app: &AppHandle,
+    conn: &Connection,
+    source: PasswordSource<'_>,
+) -> Result<(), String> {
+    let plain_password = match &source {
+        PasswordSource::Plain(p) => *p,
+        PasswordSource::Obscured(_) => None,
+    };
     let conf_path = store::rclone_conf_path(app)?;
     let existing = fs::read_to_string(&conf_path).unwrap_or_default();
     let section = remote_name(&conn.id);
@@ -215,9 +242,12 @@ pub fn upsert_remote(
             if !conn.user.is_empty() {
                 body.push(format!("access_key_id = {}", conn.user));
             }
-            match plain_password {
-                Some(p) if !p.is_empty() => {
+            match (&source, plain_password) {
+                (PasswordSource::Plain(Some(p)), _) if !p.is_empty() => {
                     body.push(format!("secret_access_key = {}", obscure(app, p)?))
+                }
+                (PasswordSource::Obscured(Some(o)), _) if !o.is_empty() => {
+                    body.push(format!("secret_access_key = {o}"))
                 }
                 _ => {
                     if let Some(keep) = &old_pass {
@@ -257,13 +287,19 @@ pub fn upsert_remote(
     if !conn.user.is_empty() && !conn.protocol.is_s3() {
         body.push(format!("user = {}", conn.user));
     }
-    if let Some(pass) = plain_password {
-        if !pass.is_empty() {
+    match &source {
+        PasswordSource::Plain(Some(pass)) if !pass.is_empty() => {
             body.push(format!("pass = {}", obscure(app, pass)?));
         }
-    } else if let Some(keep) = old_pass {
-        // 编辑连接时没重新输入密码，沿用 rclone.conf 里已有的
-        body.push(keep);
+        PasswordSource::Obscured(Some(o)) if !o.is_empty() => {
+            body.push(format!("pass = {o}"));
+        }
+        _ => {
+            // 编辑连接时没重新输入密码，沿用 rclone.conf 里已有的
+            if let Some(keep) = old_pass {
+                body.push(keep);
+            }
+        }
     }
 
     let mut text = kept.join("\n");
@@ -453,6 +489,22 @@ pub fn unmount(child: &mut Child, target: &str) -> Result<(), String> {
 /// 从 rclone.conf 里取回某个连接的明文密码（供"测试连接"复用已保存的密码）。
 /// rclone 的 obscure 是可逆混淆，用 `rclone reveal` 还原。
 pub fn reveal_password(app: &AppHandle, id: &str) -> Option<String> {
+    let obscured = raw_password(app, id)?;
+    let rclone = find_rclone(app)?;
+    let out = command_for(&rclone)
+        .arg("reveal")
+        .arg(&obscured)
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    Some(String::from_utf8_lossy(&out.stdout).trim().to_string())
+}
+
+/// 取出 rclone.conf 中该连接已混淆的密码原文（导出配置时随连接一起带走，
+/// 明文密码永远不会出现在导出文件里）。
+pub fn raw_password(app: &AppHandle, id: &str) -> Option<String> {
     let conf_path = store::rclone_conf_path(app).ok()?;
     let text = fs::read_to_string(conf_path).ok()?;
     let section = remote_name(id);
@@ -466,24 +518,20 @@ pub fn reveal_password(app: &AppHandle, id: &str) -> Option<String> {
             continue;
         }
         if in_section {
-            if let Some(rest) = trimmed.strip_prefix("pass =") {
-                obscured = Some(rest.trim().to_string());
+            for key in ["pass =", "secret_access_key ="] {
+                if let Some(rest) = trimmed.strip_prefix(key) {
+                    let v = rest.trim();
+                    if !v.is_empty() {
+                        obscured = Some(v.to_string());
+                    }
+                }
+            }
+            if obscured.is_some() {
                 break;
             }
         }
     }
-
-    let obscured = obscured?;
-    let rclone = find_rclone(app)?;
-    let out = command_for(&rclone)
-        .arg("reveal")
-        .arg(&obscured)
-        .output()
-        .ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    Some(String::from_utf8_lossy(&out.stdout).trim().to_string())
+    obscured
 }
 
 /// 读取 rclone 版本号（取 `rclone version` 第一行里的 vX.Y.Z）

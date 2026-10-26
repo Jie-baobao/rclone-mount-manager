@@ -2,17 +2,19 @@ mod autostart;
 mod diag;
 mod model;
 mod rclone;
+mod settings;
 mod store;
 mod update;
 
 use model::{Connection, ConnectionInput, DiagResult, MountState, Protocol};
+use settings::Settings;
 use std::collections::HashMap;
 use std::process::Child;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::menu::{Menu, MenuItem};
-use tauri::tray::TrayIconBuilder;
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 /// 一个进行中的挂载会话
@@ -78,6 +80,53 @@ fn new_id() -> String {
         .map(|d| d.as_nanos())
         .unwrap_or(0);
     format!("{nanos:x}")
+}
+
+/// 往连接日志尾部追加一行（探测结果也写进这里，UI 的"挂载日志"能直接看到）
+fn append_probe_log(app: &AppHandle, id: &str, cfg: &Settings, line: &str) {
+    let Ok(path) = store::mount_log_path(app, id) else {
+        return;
+    };
+    use std::io::Write;
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+        let _ = writeln!(f, "{line}");
+    }
+    // 超过大小上限就裁掉前半段，保留最近的内容
+    if let Ok(meta) = std::fs::metadata(&path) {
+        let max = cfg.log_max_mb * 1024 * 1024;
+        if meta.len() > max {
+            let text = std::fs::read_to_string(&path).unwrap_or_default();
+            let lines: Vec<&str> = text.lines().collect();
+            let keep_from = lines.len() / 2;
+            let _ = std::fs::write(&path, lines[keep_from..].join("\n"));
+        }
+    }
+}
+
+/// 按保留天数清理过期日志；每小时跑一次就够
+fn cleanup_old_logs(app: &AppHandle, cfg: &Settings) {
+    let Ok(dir) = store::log_dir(app) else { return };
+    let cutoff = std::time::SystemTime::now()
+        - Duration::from_secs(cfg.log_retention_days as u64 * 86_400);
+    let Ok(entries) = std::fs::read_dir(&dir) else { return };
+    for entry in entries.flatten() {
+        let Ok(meta) = entry.metadata() else { continue };
+        if !meta.is_file() {
+            continue;
+        }
+        let expired = meta
+            .modified()
+            .map(|m| m < cutoff)
+            .unwrap_or(false);
+        if expired {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+}
+
+/// 时间戳，探测日志用
+fn timestamp() -> String {
+    chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string()
 }
 
 /// 表单 → 连接对象。编辑时沿用旧的 id / 创建时间 / 置顶状态。
@@ -436,6 +485,87 @@ fn open_url(url: String) -> Result<(), String> {
     update::open_url(&url)
 }
 
+// ---------------------------------------------------------------- 设置 / 导入导出
+
+#[tauri::command]
+fn get_settings(app: AppHandle) -> Settings {
+    settings::load(&app)
+}
+
+#[tauri::command]
+fn save_settings(app: AppHandle, s: Settings) -> Result<Settings, String> {
+    let valid = s.validate()?;
+    settings::save(&app, &valid)?;
+    Ok(valid)
+}
+
+/// 导出连接配置为 JSON 字符串。密码以 rclone obscure 形式附带（非明文），
+/// 没有密码的连接导出空值。由前端负责落盘（浏览器下载）。
+#[tauri::command]
+fn export_connections(app: AppHandle) -> Result<String, String> {
+    let list = store::load_connections(&app);
+    let items: Vec<serde_json::Value> = list
+        .iter()
+        .map(|c| {
+            let mut v = serde_json::to_value(c).unwrap_or_default();
+            if let Some(obj) = v.as_object_mut() {
+                obj.insert(
+                    "password_obscured".into(),
+                    serde_json::Value::String(rclone::raw_password(&app, &c.id).unwrap_or_default()),
+                );
+            }
+            v
+        })
+        .collect();
+    let doc = serde_json::json!({
+        "app": "rclone-mount-manager",
+        "format": 1,
+        "exported_at": now_secs(),
+        "connections": items,
+    });
+    serde_json::to_string_pretty(&doc).map_err(|e| format!("序列化失败：{e}"))
+}
+
+/// 导入连接配置：跳过与现有连接重名的条目，其余按合并方式追加，
+/// id 一律重新生成避免冲突。返回实际导入的条数。
+#[tauri::command]
+fn import_connections(app: AppHandle, data: String) -> Result<usize, String> {
+    let doc: serde_json::Value =
+        serde_json::from_str(&data).map_err(|_| "文件不是有效的 JSON 配置".to_string())?;
+    let items = doc
+        .get("connections")
+        .and_then(|v| v.as_array())
+        .ok_or("文件里找不到 connections 数组，请确认导出的是本应用的配置文件")?;
+
+    let mut list = store::load_connections(&app);
+    let mut imported = 0;
+    for item in items {
+        let mut conn: Connection = serde_json::from_value(item.clone())
+            .map_err(|e| format!("连接条目解析失败：{e}"))?;
+        let obscured = item
+            .get("password_obscured")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string());
+
+        // 名称冲突的条目跳过，避免把现有配置搅乱
+        if list.iter().any(|c| c.name == conn.name) {
+            continue;
+        }
+        conn.id = new_id();
+        conn.created_at = now_secs();
+        conn.pinned = false;
+        rclone::upsert_remote_obscured(&app, &conn, obscured.as_deref())?;
+        list.push(conn);
+        imported += 1;
+    }
+    if imported > 0 {
+        store::save_connections(&app, &list)?;
+        let _ = app.emit("connections-changed", ());
+    }
+    Ok(imported)
+}
+
 /// 连接测试放到阻塞线程池里跑，避免 15 秒超时把界面卡住
 #[tauri::command]
 async fn test_connection(app: AppHandle, input: ConnectionInput) -> Result<DiagResult, String> {
@@ -519,60 +649,108 @@ fn spawn_supervisor(app: AppHandle) {
     });
 }
 
-/// 每 15 秒对已挂载连接做一次轻量探测，把「网络波动」变成看得见的黄灯。
+/// 周期性主动探测已挂载连接：把「网络波动」变成看得见的黄灯。
+/// 间隔与阈值都能在设置页里调，改动保存后下一轮立即生效。
 fn spawn_health_monitor(app: AppHandle) {
     std::thread::spawn(move || {
         std::thread::sleep(Duration::from_secs(8));
+        let mut last_cleanup = Instant::now();
         loop {
-            std::thread::sleep(Duration::from_secs(15));
+            let cfg = settings::load(&app);
+            std::thread::sleep(Duration::from_secs(cfg.probe_interval_secs.max(3)));
 
             let state = app.state::<AppState>();
             let ids: Vec<String> = state.sessions.lock().unwrap().keys().cloned().collect();
-            if ids.is_empty() {
-                continue;
-            }
-            let conns = store::load_connections(&app);
-            let mut changed = false;
+            if !ids.is_empty() {
+                let conns = store::load_connections(&app);
+                let mut changed = false;
 
-            for id in ids {
-                let Some(conn) = conns.iter().find(|c| c.id == id) else {
-                    continue;
-                };
-                let result = rclone::probe_latency(&app, conn, 8);
-                let now = now_secs();
+                for id in ids {
+                    let Some(conn) = conns.iter().find(|c| c.id == id) else {
+                        continue;
+                    };
+                    let result = rclone::probe_latency(&app, conn, 8);
+                    let now = now_secs();
 
-                let mut guard = state.health.lock().unwrap();
-                let entry = guard.entry(id.clone()).or_default();
-                let before = (entry.state, entry.latency_ms);
+                    let mut guard = state.health.lock().unwrap();
+                    let entry = guard.entry(id.clone()).or_default();
+                    let before = (entry.state, entry.latency_ms);
 
-                match result {
-                    Ok(ms) => {
-                        entry.fails = 0;
-                        entry.latency_ms = Some(ms);
-                        entry.state = if ms > 1200 { "slow" } else { "healthy" };
-                    }
-                    Err(e) => {
-                        entry.fails = entry.fails.saturating_add(1);
-                        // 偶发超时只算波动（黄），连续 3 次才判定故障（红）
-                        entry.state = if entry.fails >= 3 { "error" } else { "slow" };
-                        entry.latency_ms = None;
-                        if entry.fails >= 3 {
-                            state
-                                .errors
-                                .lock()
-                                .unwrap()
-                                .insert(id.clone(), format!("连接探测失败：{e}"));
+                    match result {
+                        Ok(ms) => {
+                            entry.fails = 0;
+                            entry.latency_ms = Some(ms);
+                            // 单次探测超过阈值 → 黄（网络波动）
+                            entry.state = if ms > cfg.latency_threshold_ms {
+                                "slow"
+                            } else {
+                                "healthy"
+                            };
+                            append_probe_log(
+                                &app,
+                                &id,
+                                &cfg,
+                                &format!("[探测 {}] 正常 · {} ms", timestamp(), ms),
+                            );
+                        }
+                        Err(e) => {
+                            entry.fails = entry.fails.saturating_add(1);
+                            entry.latency_ms = None;
+                            // 连续失败次数决定颜色：≥error_fails 红，≥warn_fails 黄
+                            if entry.fails >= cfg.error_fails {
+                                entry.state = "error";
+                                state
+                                    .errors
+                                    .lock()
+                                    .unwrap()
+                                    .insert(id.clone(), format!("连接探测失败：{e}"));
+                                append_probe_log(
+                                    &app,
+                                    &id,
+                                    &cfg,
+                                    &format!(
+                                        "[探测 {}] 失败 · 连续第 {} 次 → 连接异常：{e}",
+                                        timestamp(),
+                                        entry.fails
+                                    ),
+                                );
+                            } else if entry.fails >= cfg.warn_fails {
+                                entry.state = "slow";
+                                append_probe_log(
+                                    &app,
+                                    &id,
+                                    &cfg,
+                                    &format!(
+                                        "[探测 {}] 超时 · 连续第 {} 次 → 网络波动",
+                                        timestamp(),
+                                        entry.fails
+                                    ),
+                                );
+                            } else {
+                                // 偶发一次失败先保持绿灯，写进日志供排查
+                                append_probe_log(
+                                    &app,
+                                    &id,
+                                    &cfg,
+                                    &format!("[探测 {}] 偶发失败（{}），继续观察", timestamp(), e),
+                                );
+                            }
                         }
                     }
+                    entry.last_check = now;
+                    if before != (entry.state, entry.latency_ms) {
+                        changed = true;
+                    }
                 }
-                entry.last_check = now;
-                if before != (entry.state, entry.latency_ms) {
-                    changed = true;
+
+                if changed {
+                    let _ = app.emit("state-changed", ());
                 }
             }
 
-            if changed {
-                let _ = app.emit("state-changed", ());
+            if last_cleanup.elapsed() > Duration::from_secs(3600) {
+                cleanup_old_logs(&app, &cfg);
+                last_cleanup = Instant::now();
             }
         }
     });
@@ -588,6 +766,23 @@ fn build_tray(app: &tauri::App) -> tauri::Result<()> {
     let mut builder = TrayIconBuilder::with_id("main")
         .tooltip("Rclone Mount 管理器")
         .menu(&menu)
+        // 左键留给"弹主界面"，菜单只在右键出现
+        .show_menu_on_left_click(false)
+        .on_tray_icon_event(|tray, event| {
+            if let TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                ..
+            } = event
+            {
+                let app = tray.app_handle();
+                if let Some(w) = app.get_webview_window("main") {
+                    let _ = w.show();
+                    let _ = w.unminimize();
+                    let _ = w.set_focus();
+                }
+            }
+        })
         .on_menu_event(|app, event| match event.id.as_ref() {
             "show" => {
                 if let Some(w) = app.get_webview_window("main") {
@@ -624,6 +819,17 @@ pub fn run() {
             // 托盘失败不应阻止应用启动，只是失去"最小化到托盘"能力
             let _ = build_tray(app);
 
+            // 静默启动：仅当「通过开机自启动拉起（--silent）」且设置勾选了静默时，
+            // 才不弹主界面；手动双击图标永远显示窗口。
+            let silent_arg = std::env::args().any(|a| a == "--silent");
+            let silent = silent_arg && settings::load(app.handle()).silent_start;
+            if !silent {
+                if let Some(w) = app.get_webview_window("main") {
+                    let _ = w.show();
+                    let _ = w.set_focus();
+                }
+            }
+
             let handle = app.handle().clone();
             spawn_supervisor(handle.clone());
             spawn_health_monitor(handle);
@@ -658,7 +864,11 @@ pub fn run() {
             check_updates,
             install_rclone,
             install_winfsp,
-            open_url
+            open_url,
+            get_settings,
+            save_settings,
+            export_connections,
+            import_connections
         ])
         .build(tauri::generate_context!())
         .expect("Tauri 应用构建失败")

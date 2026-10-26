@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import Modal from "./Modal";
 import {
   api,
   isWindows,
@@ -10,17 +11,19 @@ import {
   type EnvInfo,
   type Protocol,
 } from "./api";
+import type { T } from "./i18n";
 
 interface Props {
   initial: Connection | null;
   env: EnvInfo | null;
+  t: T;
   onClose: () => void;
   onSaved: (c: Connection) => void;
 }
 
 const LETTERS = "DEFGHIJKLMNOPQRSTUVWXYZ".split("");
 
-export default function ConnectionForm({ initial, env, onClose, onSaved }: Props) {
+export default function ConnectionForm({ initial, env, t, onClose, onSaved }: Props) {
   const win = isWindows(env);
   const editing = !!initial;
 
@@ -155,216 +158,201 @@ export default function ConnectionForm({ initial, env, onClose, onSaved }: Props
   }
 
   return (
-    <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
-        <header className="modal-head">
-          <div>
-            <h2>{editing ? "编辑连接" : "新建连接"}</h2>
-            <p className="muted small">带 * 的为必填项</p>
-          </div>
-          <button className="icon-btn" onClick={onClose} title="关闭">
-            ✕
-          </button>
-        </header>
-
-        <div className="modal-body">
-          <div className="form-grid">
-            <label className="field">
-              <span>连接名称 *</span>
-              <input className="ctl" value={name} onChange={(e) => setName(e.target.value)} placeholder="例如：家里 NAS" />
-            </label>
-
-            <label className="field">
-              <span>协议</span>
-              <select className="ctl" value={protocol} onChange={(e) => changeProtocol(e.target.value as Protocol)}>
-                {(Object.keys(PROTOCOL_META) as Protocol[]).map((p) => (
-                  <option key={p} value={p}>
-                    {PROTOCOL_META[p].label}
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            {isS3 && (
-              <label className="field span2">
-                <span>服务商预设</span>
-                <select className="ctl" value={presetKey} onChange={(e) => applyPreset(e.target.value)}>
-                  {S3_PRESETS.map((p) => (
-                    <option key={p.key} value={p.key}>
-                      {p.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            )}
-
-            <label className={isS3 ? "field span2" : "field span2"}>
-              <span>{isS3 ? "服务地址（Endpoint）*" : protocol === "webdav" ? "服务器地址 *" : "主机 / IP *"}</span>
-              <input className="ctl" value={host} onChange={(e) => setHost(e.target.value)} placeholder={meta.hint} />
-            </label>
-
-            {!isS3 && (
-              <label className="field">
-                <span>端口</span>
-                <input
-                  className="ctl"
-                  type="number"
-                  value={port}
-                  onChange={(e) => setPort(Number(e.target.value) || meta.port)}
-                  placeholder={String(meta.port)}
-                />
-              </label>
-            )}
-
-            <label className={isS3 ? "field" : "field"}>
-              <span>{meta.pathLabel}</span>
-              <input className="ctl" value={path} onChange={(e) => setPath(e.target.value)} placeholder={meta.pathPlaceholder} />
-            </label>
-
-            {isS3 && (
-              <label className="field">
-                <span>区域（Region）</span>
-                <input className="ctl" value={region} onChange={(e) => setRegion(e.target.value)} placeholder="例如 us-east-1" />
-              </label>
-            )}
-
-            <label className="field">
-              <span>{isS3 ? "Access Key ID" : "用户名"}</span>
-              <input className="ctl" value={user} onChange={(e) => setUser(e.target.value)} autoComplete="off" />
-            </label>
-
-            <label className="field">
-              <span>{isS3 ? "Secret Access Key" : "密码"}</span>
-              <div className="pass-wrap">
-                <input
-                  className="ctl"
-                  type={showPass ? "text" : "password"}
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  placeholder={editing ? "留空沿用已保存密码" : ""}
-                  autoComplete="new-password"
-                />
-                <button type="button" className="pass-toggle" onClick={() => setShowPass((v) => !v)}>
-                  {showPass ? "隐藏" : "显示"}
-                </button>
-              </div>
-            </label>
-
-            <label className="field">
-              <span>{win ? "盘符 *" : "挂载点 *"}</span>
-              {win ? (
-                <select className="ctl" value={target} onChange={(e) => setTarget(e.target.value)}>
-                  {LETTERS.map((l) => (
-                    <option key={l} value={`${l}:`}>
-                      {l}:
-                    </option>
-                  ))}
-                </select>
-              ) : (
-                <input className="ctl" value={target} onChange={(e) => setTarget(e.target.value)} placeholder="/mnt/nas" />
-              )}
-            </label>
-
-            <label className="field">
-              <span>缓存目录</span>
-              <input className="ctl" value={cacheDir} onChange={(e) => setCacheDir(e.target.value)} placeholder="留空用默认" />
-            </label>
-          </div>
-
-          {isS3 && (
-            <p className="tips">
-              Bucket 可留空（挂载后再进目录选），也可以直接填。MinIO 与多数自建网关需要勾选「强制 path-style」，
-              选对应预设会自动设置。
-            </p>
-          )}
-
-          {protocol === "webdav" && (
-            <p className="tips">
-              密码里有 <code>!</code> 时注意别被输入法打成全角 <code>！</code>——看起来一样，但服务端一定返回 401。可用上面的「显示」核对。
-            </p>
-          )}
-
-          <div className="checks">
-            {protocol === "webdav" && (
-              <label className="check">
-                <input type="checkbox" checked={ignoreCert} onChange={(e) => setIgnoreCert(e.target.checked)} />
-                忽略证书校验（自签证书必选）
-              </label>
-            )}
-            {isS3 && (
-              <label className="check">
-                <input type="checkbox" checked={pathStyle} onChange={(e) => setPathStyle(e.target.checked)} />
-                强制 path-style（MinIO / 自建网关）
-              </label>
-            )}
-            <label className="check">
-              <input type="checkbox" checked={autoMount} onChange={(e) => setAutoMount(e.target.checked)} />
-              启动时自动挂载
-            </label>
-            <label className="check">
-              <input type="checkbox" checked={reconnect} onChange={(e) => setReconnect(e.target.checked)} />
-              断线自动重连
-            </label>
-          </div>
-
-          <details className="adv">
-            <summary>高级选项</summary>
-            <div className="form-grid">
-              {win && (
-                <label className="field">
-                  <span>挂载形态</span>
-                  <select className="ctl" value={networkMode ? "net" : "local"} onChange={(e) => setNetworkMode(e.target.value === "net")}>
-                    <option value="local">本地磁盘</option>
-                    <option value="net">网络驱动器</option>
-                  </select>
-                </label>
-              )}
-              <label className="field">
-                <span>带宽限制</span>
-                <input className="ctl" value={bwlimit} onChange={(e) => setBwlimit(e.target.value)} placeholder="如 10M，留空不限" />
-              </label>
-              <label className="field">
-                <span>缓存上限</span>
-                <input className="ctl" value={cacheMax} onChange={(e) => setCacheMax(e.target.value)} placeholder="如 10G" />
-              </label>
-              <label className="field">
-                <span>HTTP 代理</span>
-                <input className="ctl" value={proxy} onChange={(e) => setProxy(e.target.value)} placeholder="http://127.0.0.1:7890" />
-              </label>
-              <label className="check wide">
-                <input type="checkbox" checked={readOnly} onChange={(e) => setReadOnly(e.target.checked)} />
-                只读挂载（防止误删）
-              </label>
-            </div>
-          </details>
-
-          {result && (
-            <div className={`diag ${result.ok ? "ok" : "bad"}`}>
-              <strong>
-                {result.ok ? "✓ " : "✗ "}
-                {result.message}
-                {result.code != null && <span className="code">HTTP {result.code}</span>}
-              </strong>
-              <div className="diag-url">请求地址：{result.url}</div>
-              {result.detail && <pre className="diag-detail">{result.detail}</pre>}
-            </div>
-          )}
-
-          {error && <div className="diag bad">{error}</div>}
-        </div>
-
-        <footer className="modal-foot">
+    <Modal
+      title={editing ? t("cf.editTitle") : t("cf.newTitle")}
+      subtitle={t("cf.required")}
+      onClose={onClose}
+      footer={
+        <>
           <button className="btn ghost" onClick={onClose}>
-            取消
+            {t("cf.cancel")}
           </button>
           <button className="btn" onClick={doTest} disabled={testing || !host}>
-            {testing ? "测试中…" : "测试连接"}
+            {testing ? t("cf.testing") : t("cf.test")}
           </button>
           <button className="btn primary" onClick={doSave} disabled={saving || !name || !host}>
-            {saving ? "保存中…" : "保存"}
+            {saving ? t("cf.saving") : t("cf.save")}
           </button>
-        </footer>
+        </>
+      }
+    >
+      <div className="form-grid">
+        <label className="field">
+          <span>{t("cf.name")}</span>
+          <input className="ctl" value={name} onChange={(e) => setName(e.target.value)} placeholder={t("cf.namePh")} />
+        </label>
+
+        <label className="field">
+          <span>{t("cf.protocol")}</span>
+          <select className="ctl" value={protocol} onChange={(e) => changeProtocol(e.target.value as Protocol)}>
+            {(Object.keys(PROTOCOL_META) as Protocol[]).map((p) => (
+              <option key={p} value={p}>
+                {PROTOCOL_META[p].label}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        {isS3 && (
+          <label className="field span2">
+            <span>{t("cf.preset")}</span>
+            <select className="ctl" value={presetKey} onChange={(e) => applyPreset(e.target.value)}>
+              {S3_PRESETS.map((p) => (
+                <option key={p.key} value={p.key}>
+                  {t(`ps.${p.key}`)}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+
+        <label className="field span2">
+          <span>{isS3 ? t("cf.hostS3") : protocol === "webdav" ? t("cf.hostWebdav") : t("cf.host")}</span>
+          <input className="ctl" value={host} onChange={(e) => setHost(e.target.value)} placeholder={t(`pm.${protocol}.hint`)} />
+        </label>
+
+        {!isS3 && (
+          <label className="field">
+            <span>{t("cf.port")}</span>
+            <input
+              className="ctl"
+              type="number"
+              value={port}
+              onChange={(e) => setPort(Number(e.target.value) || meta.port)}
+              placeholder={String(meta.port)}
+            />
+          </label>
+        )}
+
+        <label className="field">
+          <span>{t(`pm.${protocol}.pathLabel`)}</span>
+          <input className="ctl" value={path} onChange={(e) => setPath(e.target.value)} placeholder={t(`pm.${protocol}.pathPlaceholder`)} />
+        </label>
+
+        {isS3 && (
+          <label className="field">
+            <span>{t("cf.region")}</span>
+            <input className="ctl" value={region} onChange={(e) => setRegion(e.target.value)} placeholder={t("cf.regionPh")} />
+          </label>
+        )}
+
+        <label className="field">
+          <span>{isS3 ? t("cf.accessKey") : t("cf.user")}</span>
+          <input className="ctl" value={user} onChange={(e) => setUser(e.target.value)} autoComplete="off" />
+        </label>
+
+        <label className="field">
+          <span>{isS3 ? t("cf.secret") : t("cf.pass")}</span>
+          <div className="pass-wrap">
+            <input
+              className="ctl"
+              type={showPass ? "text" : "password"}
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder={editing ? t("cf.passKeep") : ""}
+              autoComplete="new-password"
+            />
+            <button type="button" className="pass-toggle" onClick={() => setShowPass((v) => !v)}>
+              {showPass ? t("cf.hide") : t("cf.show")}
+            </button>
+          </div>
+        </label>
+
+        <label className="field">
+          <span>{win ? t("cf.drive") : t("cf.mountpoint")}</span>
+          {win ? (
+            <select className="ctl" value={target} onChange={(e) => setTarget(e.target.value)}>
+              {LETTERS.map((l) => (
+                <option key={l} value={`${l}:`}>
+                  {l}:
+                </option>
+              ))}
+            </select>
+          ) : (
+            <input className="ctl" value={target} onChange={(e) => setTarget(e.target.value)} placeholder={t("cf.mountpointPh")} />
+          )}
+        </label>
+
+        <label className="field">
+          <span>{t("cf.cacheDir")}</span>
+          <input className="ctl" value={cacheDir} onChange={(e) => setCacheDir(e.target.value)} placeholder={t("cf.cacheDirPh")} />
+        </label>
       </div>
-    </div>
+
+      {isS3 && <p className="tips">{t("cf.s3Tip")}</p>}
+
+      {protocol === "webdav" && <p className="tips">{t("cf.davTip")}</p>}
+
+      <div className="checks">
+        {protocol === "webdav" && (
+          <label className="check">
+            <input type="checkbox" checked={ignoreCert} onChange={(e) => setIgnoreCert(e.target.checked)} />
+            {t("cf.ignoreCert")}
+          </label>
+        )}
+        {isS3 && (
+          <label className="check">
+            <input type="checkbox" checked={pathStyle} onChange={(e) => setPathStyle(e.target.checked)} />
+            {t("cf.pathStyle")}
+          </label>
+        )}
+        <label className="check">
+          <input type="checkbox" checked={autoMount} onChange={(e) => setAutoMount(e.target.checked)} />
+          {t("cf.autoMount")}
+        </label>
+        <label className="check">
+          <input type="checkbox" checked={reconnect} onChange={(e) => setReconnect(e.target.checked)} />
+          {t("cf.reconnect")}
+        </label>
+      </div>
+
+      <details className="adv">
+        <summary>{t("cf.adv")}</summary>
+        <div className="form-grid">
+          {win && (
+            <label className="field">
+              <span>{t("app.mountMode")}</span>
+              <select className="ctl" value={networkMode ? "net" : "local"} onChange={(e) => setNetworkMode(e.target.value === "net")}>
+                <option value="local">{t("app.localDisk")}</option>
+                <option value="net">{t("app.netDrive")}</option>
+              </select>
+            </label>
+          )}
+          <label className="field">
+            <span>{t("app.bwlimit")}</span>
+            <input className="ctl" value={bwlimit} onChange={(e) => setBwlimit(e.target.value)} placeholder={t("cf.bwPh")} />
+          </label>
+          <label className="field">
+            <span>{t("app.cacheMax")}</span>
+            <input className="ctl" value={cacheMax} onChange={(e) => setCacheMax(e.target.value)} placeholder={t("cf.cachePh")} />
+          </label>
+          <label className="field">
+            <span>{t("app.proxy")}</span>
+            <input className="ctl" value={proxy} onChange={(e) => setProxy(e.target.value)} placeholder={t("cf.proxyPh")} />
+          </label>
+          <label className="check wide">
+            <input type="checkbox" checked={readOnly} onChange={(e) => setReadOnly(e.target.checked)} />
+            {t("cf.readOnly")}
+          </label>
+        </div>
+      </details>
+
+      {result && (
+        <div className={`diag ${result.ok ? "ok" : "bad"}`}>
+          <strong>
+            {result.ok ? "✓ " : "✗ "}
+            {result.message}
+            {result.code != null && <span className="code">HTTP {result.code}</span>}
+          </strong>
+          <div className="diag-url">
+            {t("cf.reqUrl")}
+            {result.url}
+          </div>
+          {result.detail && <pre className="diag-detail">{result.detail}</pre>}
+        </div>
+      )}
+
+      {error && <div className="diag bad">{error}</div>}
+    </Modal>
   );
 }

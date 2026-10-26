@@ -139,7 +139,7 @@ function reply(cmd: string, args?: Record<string, unknown>): unknown {
     case "get_env":
       return {
         platform: "windows x86_64",
-        app_version: "0.2.0",
+        app_version: "0.3.0",
         rclone_path: "C:\\Program Files\\Rclone Mount Manager\\resources\\rclone\\rclone.exe",
         rclone_version: "1.75.2",
         rclone_source: "bundled",
@@ -170,6 +170,23 @@ function reply(cmd: string, args?: Record<string, unknown>): unknown {
       return LOG;
     case "get_autostart":
       return true;
+    case "get_settings":
+      return {
+        language: "system",
+        silent_start: true,
+        probe_interval_secs: 15,
+        latency_threshold_ms: 1200,
+        warn_fails: 2,
+        error_fails: 3,
+        log_max_mb: 5,
+        log_retention_days: 30,
+      };
+    case "save_settings":
+      return args?.s;
+    case "export_connections":
+      return JSON.stringify({ app: "rclone-mount-manager", format: 1, connections: list.map((c) => ({ ...c, password_obscured: "" })) });
+    case "import_connections":
+      return 2;
     case "check_updates":
       return {
         items: [

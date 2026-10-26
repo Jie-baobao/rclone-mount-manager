@@ -11,6 +11,20 @@ await page.goto(url, { waitUntil: "networkidle" });
 await page.waitForTimeout(600);
 await page.screenshot({ path: "docs/screenshots/main.png" });
 
+// 设置页上半部分（通用 / 启动 / 探测规则 / 日志）
+await page.locator(".sidebar-foot button.btn.ghost").click();
+await page.waitForTimeout(400);
+await page.screenshot({ path: "docs/screenshots/settings.png" });
+
+// 设置页下半部分（依赖与更新 / 数据）
+await page.locator(".modal.settings .modal-body").evaluate((el) => {
+  el.scrollTop = el.scrollHeight;
+});
+await page.waitForTimeout(400);
+await page.screenshot({ path: "docs/screenshots/settings-deps.png" });
+await page.locator(".modal .icon-btn").click();
+await page.waitForTimeout(200);
+
 // 打开新建连接弹窗
 await page.getByRole("button", { name: /新建连接/ }).click();
 await page.waitForTimeout(400);
@@ -31,10 +45,10 @@ await page.selectOption(".modal select.ctl >> nth=1", "aliyun").catch(() => {});
 await page.waitForTimeout(300);
 await page.screenshot({ path: "docs/screenshots/s3-form.png" });
 
-// 挂载失败状态（点第二个连接，模拟数据里它带上次的错误）
-await page.keyboard.press("Escape");
 await page.locator(".modal .icon-btn").click().catch(() => {});
 await page.waitForTimeout(200);
+
+// 挂载失败状态（点第二个连接，模拟数据里它带上次的错误）
 await page.getByText("办公室共享盘").click();
 await page.waitForTimeout(400);
 await page.screenshot({ path: "docs/screenshots/error-state.png" });
@@ -45,12 +59,5 @@ await dark.goto(url, { waitUntil: "networkidle" });
 await dark.waitForTimeout(500);
 await dark.screenshot({ path: "docs/screenshots/main-dark.png" });
 
-// 版本与依赖面板
-await page.locator(".env-card").click();
-await page.waitForTimeout(300);
-await page.getByRole("button", { name: "检查更新" }).click();
-await page.waitForTimeout(600);
-await page.screenshot({ path: "docs/screenshots/about.png" });
-
 await browser.close();
-console.log("截图完成：docs/screenshots/main.png shots/modal.png shots/modal-adv.png shots/main-dark.png");
+console.log("截图完成：main / settings / settings-deps / modal / modal-adv / s3-form / error-state / main-dark");

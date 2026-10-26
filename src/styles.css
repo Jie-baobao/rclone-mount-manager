@@ -958,3 +958,63 @@ input[type="number"].ctl {
   white-space: nowrap;
   vertical-align: bottom;
 }
+
+/* ------------------------------ 设置页 */
+/* 比新建连接稍宽，但始终小于主窗口（主窗口最小 880 宽，这里最多 760） */
+.modal.settings {
+  width: min(760px, 100%);
+}
+
+.modal.settings .modal-body {
+  padding-bottom: 18px;
+}
+
+.set-section {
+  margin: 20px 0 10px;
+  padding-bottom: 6px;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  text-transform: uppercase;
+  border-bottom: 1px solid var(--border);
+}
+
+.set-section:first-child {
+  margin-top: 2px;
+}
+
+.row-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 8px;
+}
+
+.data-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.data-actions .btn,
+.data-actions label.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+
+.check.disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.field small.muted {
+  font-size: 10.5px;
+  line-height: 1.5;
+}
+
+/* 设置页里的「检查更新」不要拉满整行 */
+.modal.settings .about-actions > .btn {
+  align-self: flex-start;
+}

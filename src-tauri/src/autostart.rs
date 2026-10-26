@@ -25,7 +25,8 @@ pub fn set_enabled(enable: bool) -> Result<(), String> {
 
     if enable {
         let exe = exe_path()?;
-        let value = format!("\"{}\"", exe.display());
+        // 带 --silent 启动：由设置里的「静默启动」决定要不要弹主界面
+        let value = format!("\"{}\" --silent", exe.display());
         key.set_value(ENTRY_NAME, &value)
             .map_err(|e| format!("写入启动项失败：{e}"))?;
     } else {
@@ -66,7 +67,11 @@ pub fn set_enabled(enable: bool) -> Result<(), String> {
 <plist version="1.0">
 <dict>
   <key>Label</key><string>{BUNDLE_ID}</string>
-  <key>ProgramArguments</key><array><string>{}</string></array>
+  <key>ProgramArguments</key>
+  <array>
+    <string>{}</string>
+    <string>--silent</string>
+  </array>
   <key>RunAtLoad</key><true/>
 </dict>
 </plist>
@@ -104,7 +109,7 @@ pub fn set_enabled(enable: bool) -> Result<(), String> {
             std::fs::create_dir_all(dir).map_err(|e| format!("创建目录失败：{e}"))?;
         }
         let entry = format!(
-            "[Desktop Entry]\nType=Application\nName=Rclone Mount Manager\nExec=\"{}\"\nX-GNOME-Autostart-enabled=true\n",
+            "[Desktop Entry]\nType=Application\nName=Rclone Mount Manager\nExec=\"{}\" --silent\nX-GNOME-Autostart-enabled=true\n",
             exe.display()
         );
         std::fs::write(&path, entry).map_err(|e| format!("写入启动项失败：{e}"))?;
