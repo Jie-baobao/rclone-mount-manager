@@ -1,0 +1,40 @@
+{
+  "fallback": "zh-CN",
+  "languages": [
+    {
+      "code": "zh-CN",
+      "native": "简体中文",
+      "file": "./zh-CN.json"
+    },
+    {
+      "code": "zh-TW",
+      "native": "繁體中文",
+      "file": "./zh-TW.json"
+    },
+    {
+      "code": "en",
+      "native": "English",
+      "file": "./en.json"
+    },
+    {
+      "code": "fr",
+      "native": "Français",
+      "file": "./fr.json"
+    },
+    {
+      "code": "de",
+      "native": "Deutsch",
+      "file": "./de.json"
+    },
+    {
+      "code": "ja",
+      "native": "日本語",
+      "file": "./ja.json"
+    },
+    {
+      "code": "ko",
+      "native": "한국어",
+      "file": "./ko.json"
+    }
+  ]
+}

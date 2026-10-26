@@ -111,7 +111,7 @@
 
 ### 体验
 
-- **七语言界面**：简体中文 / 繁體中文 / English / Français / Deutsch / 日本語 / 한국어，默认跟随系统语言，可在设置里手动切换（下拉项用各自语言显示）。界面文案全部走翻译表；后端返回的原文（WebDAV 诊断说明、rclone 报错、日志内容）保持原话，方便对照官方文档排查
+- **七语言界面**：简体中文 / 繁體中文 / English / Français / Deutsch / 日本語 / 한국어，默认跟随系统语言，可在设置里手动切换（下拉项用各自语言显示）。文案是独立的语言文件（`src/locales/*.json`），加语言不用改代码；界面文案全部走翻译表，后端返回的原文（WebDAV 诊断说明、rclone 报错、日志内容）保持原话，方便对照官方文档排查
 - 跟随系统深浅色
 - **统一的设置页**：通用 / 启动 / 探测规则 / 日志 / 依赖与更新 / 数据，分区标题，全部弹窗同一套样式
 - **开机自启动 + 静默启动**（默认勾选）：静默时只在托盘待命，不弹主界面；手动打开程序永远显示窗口
@@ -283,11 +283,47 @@ node scripts/shot.mjs             # 输出到 docs/screenshots/
 - [ ] 上行 / 下行分开的流量统计与按天汇总（**待定**：rclone 统计不区分方向，
       要拆分只能读系统网卡计数器，会把其它程序流量算进来，先不做）
 
+## 新增一种语言（只改语言文件，不动代码）
+
+界面文案全部放在 `src/locales/`，一种语言一个 JSON，清单文件 `languages.json` 指定内置哪几种、
+以及每种语言的文件路径：
+
+```jsonc
+// src/locales/languages.json
+{
+  "fallback": "zh-CN",                                  // 缺 key 时回退到哪种语言
+  "languages": [
+    { "code": "zh-CN", "native": "简体中文", "file": "./zh-CN.json" },
+    { "code": "zh-TW", "native": "繁體中文", "file": "./zh-TW.json" },
+    { "code": "en",    "native": "English",  "file": "./en.json"  }
+    // 加一行就是加一种语言，顺序就是设置页下拉框的顺序
+  ]
+}
+```
+
+加一种语言就两步：
+
+1. 复制 `src/locales/en.json` → `src/locales/pt-BR.json`，把值翻译掉（键名不要动，占位符如 `{v}`、`{name}` 保持原样）；
+2. 在 `languages.json` 的 `languages` 里加一行 `{ "code": "pt-BR", "native": "Português (Brasil)", "file": "./pt-BR.json" }`。
+
+重新构建后设置页下拉框里就有它，`system`（跟随系统语言）也会按 `navigator.language` 自动匹配到它
+（`pt-BR` / `pt-PT` 都能命中 `pt-BR`；中文会额外区分简繁）。
+
+几个设计取舍：
+
+- **构建时打包，不读磁盘**：`src/i18n.ts` 用 `import.meta.glob` 把 `locales/*.json` 全部编译进前端资源，
+  发布出去的安装包自带所有语言，运行时不依赖任何外部文件，也就不会因为文件丢了白屏。
+- **清单写错不会炸**：声明了但文件不存在，只跳过这一项并在控制台告警，其余语言照常工作；`fallback`
+  写了不存在的代码就退化成清单第一项。
+- **改完记得自检**：`npm run i18n:check`（`npm run build` 也会先跑）会以回退语言为基准检查每个文件的
+  缺键 / 多键 / 空值 / 占位符不一致，任何一项不过就直接失败。
+
 ## 贡献
 
 欢迎 Issue 和 PR。提交前请确保：
 
 ```bash
+npm run i18n:check                   # 语言文件完整性（缺键 / 多键 / 占位符）
 npm run build                        # 前端类型检查 + 构建
 cd src-tauri && cargo fmt --check    # Rust 格式
 cd src-tauri && cargo check          # Rust 编译检查
