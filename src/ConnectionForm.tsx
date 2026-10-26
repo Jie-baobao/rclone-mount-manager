@@ -10,6 +10,7 @@ import {
   type DiagResult,
   type EnvInfo,
   type Protocol,
+  type ProbeMode,
 } from "./api";
 import type { T } from "./i18n";
 
@@ -46,6 +47,9 @@ export default function ConnectionForm({ initial, env, t, onClose, onSaved }: Pr
   const [proxy, setProxy] = useState(initial?.proxy ?? "");
   const [reconnect, setReconnect] = useState(initial?.reconnect ?? true);
   const [autoMount, setAutoMount] = useState(initial?.auto_mount ?? false);
+  const [group, setGroup] = useState(initial?.group ?? "");
+  const [sysProxy, setSysProxy] = useState(initial?.use_system_proxy ?? false);
+  const [probeMode, setProbeMode] = useState<ProbeMode>(initial?.probe_mode ?? "light");
 
   const [s3Provider, setS3Provider] = useState(initial?.s3_provider ?? "Other");
   const [region, setRegion] = useState(initial?.region ?? "");
@@ -86,6 +90,9 @@ export default function ConnectionForm({ initial, env, t, onClose, onSaved }: Pr
       reconnect,
       auto_mount: autoMount,
       pinned: initial?.pinned ?? false,
+      group,
+      use_system_proxy: sysProxy,
+      probe_mode: probeMode,
     }),
     [
       initial?.id,
@@ -110,6 +117,9 @@ export default function ConnectionForm({ initial, env, t, onClose, onSaved }: Pr
       proxy,
       reconnect,
       autoMount,
+      group,
+      sysProxy,
+      probeMode,
     ]
   );
 
@@ -192,6 +202,11 @@ export default function ConnectionForm({ initial, env, t, onClose, onSaved }: Pr
               </option>
             ))}
           </select>
+        </label>
+
+        <label className="field">
+          <span>{t("cf.group")}</span>
+          <input className="ctl" value={group} onChange={(e) => setGroup(e.target.value)} placeholder={t("cf.groupPh")} />
         </label>
 
         {isS3 && (
@@ -331,11 +346,24 @@ export default function ConnectionForm({ initial, env, t, onClose, onSaved }: Pr
             <span>{t("app.proxy")}</span>
             <input className="ctl" value={proxy} onChange={(e) => setProxy(e.target.value)} placeholder={t("cf.proxyPh")} />
           </label>
+          <label className="field">
+            <span>{t("cf.probeMode")}</span>
+            <select className="ctl" value={probeMode} onChange={(e) => setProbeMode(e.target.value as ProbeMode)}>
+              <option value="light">{t("pm.probe.light")}</option>
+              <option value="full">{t("pm.probe.full")}</option>
+              <option value="process">{t("pm.probe.process")}</option>
+            </select>
+          </label>
+          <label className="check wide" title={t("cf.sysProxyTip")}>
+            <input type="checkbox" checked={sysProxy} onChange={(e) => setSysProxy(e.target.checked)} />
+            {t("cf.sysProxy")}
+          </label>
           <label className="check wide">
             <input type="checkbox" checked={readOnly} onChange={(e) => setReadOnly(e.target.checked)} />
             {t("cf.readOnly")}
           </label>
         </div>
+        <p className="tips">{t("cf.probeModeTip")}</p>
       </details>
 
       {result && (

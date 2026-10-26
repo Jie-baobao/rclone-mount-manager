@@ -13,6 +13,24 @@ await page.waitForTimeout(600);
 // 默认状态：没有选中任何连接 → 首页概览
 await page.screenshot({ path: "docs/screenshots/main.png" });
 
+// 排序条：点「分组」→ 正序（↑ 高亮），再点 → 倒序（↓）
+await page.locator(".sort-chip", { hasText: /分组|Group|Groupe|Gruppe|グループ|그룹/ }).click();
+await page.waitForTimeout(400);
+await page.screenshot({ path: "docs/screenshots/sort-group.png" });
+await page.locator(".sort-chip.active").click();
+await page.waitForTimeout(400);
+await page.screenshot({ path: "docs/screenshots/sort-group-desc.png" });
+// 第三下恢复默认
+await page.locator(".sort-chip.active").click();
+await page.waitForTimeout(300);
+await page.locator(".sort-chip", { hasText: /状态|Status|État|상태/ }).click();
+await page.waitForTimeout(400);
+await page.screenshot({ path: "docs/screenshots/sort-status.png" });
+await page.locator(".sort-chip.active").click();
+await page.waitForTimeout(200);
+await page.locator(".sort-chip.active").click();
+await page.waitForTimeout(300);
+
 // 点第一个连接进详情（含「节点概况」图表），视口高一点好完整截下来
 await page.locator(".conn").first().click();
 await page.setViewportSize({ width: 1180, height: 900 });

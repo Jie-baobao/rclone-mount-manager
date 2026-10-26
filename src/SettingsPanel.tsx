@@ -19,6 +19,8 @@ const DEFAULTS: Settings = {
   error_fails: 3,
   log_max_mb: 5,
   log_retention_days: 30,
+  sort_by: "default",
+  sort_dir: "asc",
 };
 
 /**
@@ -271,6 +273,7 @@ export default function SettingsPanel({
 
       {/* 依赖与更新 */}
       <h3 className="set-section">{t("st.sectionDeps")}</h3>
+      <p className="tips">{t("st.updateNote")}</p>
       <div className="ver-list">
         <div className="ver-row">
           <div>

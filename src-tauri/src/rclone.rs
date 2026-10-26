@@ -378,7 +378,7 @@ pub fn build_mount_args(
         "--log-level".into(),
         "INFO".into(),
         "--volname".into(),
-        conn.name.clone(),
+        volname(conn),
         // 本机 rc 端口：界面靠它读实时吞吐/传输统计，只绑定回环地址
         "--rc".into(),
         "--rc-no-auth".into(),
@@ -444,6 +444,92 @@ pub fn build_mount_args(
     Ok(args)
 }
 
+/// 卷标：有分组时显示成 `[工作] NAS`，资源管理器按名称排序时同组磁盘自然相邻。
+/// 注意：卷名在挂载那一刻定死，改组名/名称后要重新挂载才会刷新。
+fn volname(conn: &Connection) -> String {
+    let g = conn.group.trim();
+    let n = conn.name.trim();
+    if g.is_empty() {
+        n.to_string()
+    } else {
+        format!("[{g}] {n}")
+    }
+}
+
+/// 读系统代理设置。Windows 读「Internet 选项」注册表；类 Unix 读环境变量。
+pub fn system_proxy_url() -> Option<String> {
+    #[cfg(windows)]
+    {
+        use winreg::enums::*;
+        use winreg::RegKey;
+        let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+        let ok = hkcu
+            .open_subkey("Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings")
+            .ok()?;
+        let enabled: u32 = ok.get_value("ProxyEnable").ok()?;
+        if enabled != 1 {
+            return None;
+        }
+        let server: String = ok.get_value("ProxyServer").ok()?;
+        let server = server.trim().to_string();
+        if server.is_empty() {
+            return None;
+        }
+        // 可能是 "127.0.0.1:7890"，也可能是 "http=...;https=..." 的分段写法
+        if server.contains('=') {
+            let https = server
+                .split(';')
+                .find_map(|p| {
+                    let (k, v) = p.split_once('=')?;
+                    k.trim().eq_ignore_ascii_case("https").then(|| v.trim().to_string())
+                })
+                .or_else(|| {
+                    server.split(';').find_map(|p| {
+                        let (k, v) = p.split_once('=')?;
+                        k.trim().eq_ignore_ascii_case("http").then(|| v.trim().to_string())
+                    })
+                })?;
+            return Some(format!("http://{https}"));
+        }
+        if server.contains("://") {
+            Some(server)
+        } else {
+            Some(format!("http://{server}"))
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        for key in ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"] {
+            if let Ok(v) = std::env::var(key) {
+                let v = v.trim().to_string();
+                if !v.is_empty() {
+                    return Some(v);
+                }
+            }
+        }
+        None
+    }
+}
+
+/// 给子进程注入代理环境变量：手动填写的 proxy 优先，其次按开关走系统代理。
+/// 无论如何都把回环地址排除掉，避免本机 rc 端口的统计请求被代理截走。
+fn apply_proxy_env(cmd: &mut Command, conn: &Connection) {
+    let proxy = if !conn.proxy.trim().is_empty() {
+        Some(conn.proxy.trim().to_string())
+    } else if conn.use_system_proxy {
+        system_proxy_url()
+    } else {
+        None
+    };
+    if let Some(p) = proxy {
+        for key in ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"] {
+            cmd.env(key, &p);
+        }
+        cmd.env("NO_PROXY", "localhost,127.0.0.1,::1");
+        cmd.env("no_proxy", "localhost,127.0.0.1,::1");
+    }
+}
+
 /// 启动挂载进程（不阻塞 UI）
 pub fn spawn_mount(
     app: &AppHandle,
@@ -460,13 +546,8 @@ pub fn spawn_mount(
         .stderr(Stdio::null())
         .stdin(Stdio::null());
 
-    // 代理：rclone 读标准的环境变量
-    let proxy = conn.proxy.trim();
-    if !proxy.is_empty() {
-        for key in ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"] {
-            cmd.env(key, proxy);
-        }
-    }
+    // 代理：rclone 读标准的环境变量（手动填写优先，其次系统代理）
+    apply_proxy_env(&mut cmd, conn);
 
     // 类 Unix 上脱离父进程，避免应用退出时把挂载一起带走
     #[cfg(unix)]
@@ -587,6 +668,9 @@ pub fn tail_log(path: &Path, max_lines: usize) -> String {
 ///
 /// 用 `rclone lsd --max-depth 0` 而不是 ping：走的是真实协议栈，
 /// 能同时反映「网络慢」和「认证被拒 / 服务端异常」两种情况。
+///
+/// **注意碰盘**：lsd 会让 NAS 读一次目录元数据，会把休眠中的硬盘唤醒。
+/// 有休眠需求的连接请在表单里把「探测方式」改成轻量或仅进程。
 pub fn probe_latency(app: &AppHandle, conn: &Connection, timeout_secs: u64) -> Result<u64, String> {
     let rclone = find_rclone(app).ok_or_else(|| "未找到 rclone".to_string())?;
     let conf = store::rclone_conf_path(app)?;
@@ -625,12 +709,7 @@ pub fn probe_latency(app: &AppHandle, conn: &Connection, timeout_secs: u64) -> R
         cmd.arg("--no-check-certificate");
     }
 
-    let proxy = conn.proxy.trim();
-    if !proxy.is_empty() {
-        for key in ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"] {
-            cmd.env(key, proxy);
-        }
-    }
+    apply_proxy_env(&mut cmd, conn);
 
     let started = std::time::Instant::now();
     let mut child = cmd.spawn().map_err(|e| format!("探测失败：{e}"))?;
@@ -666,6 +745,43 @@ pub fn probe_latency(app: &AppHandle, conn: &Connection, timeout_secs: u64) -> R
             Err(e) => return Err(format!("探测失败：{e}")),
         }
     }
+}
+
+/// 轻量探测：只做一次 TCP 握手，不发起任何文件系统请求。
+/// 完全不碰盘，NAS 硬盘可以安心休眠；代价是测不出「服务活着但文件层异常」的情况。
+pub fn tcp_probe(conn: &Connection, timeout_secs: u64) -> Result<u64, String> {
+    use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
+
+    // WebDAV 允许直接填完整 URL，取里面的主机；其余协议 host 就是主机名/IP
+    let mut host = conn.host.trim().to_string();
+    if let Some(pos) = host.find("://") {
+        host = host[pos + 3..].to_string();
+    }
+    let host = host.split('/').next().unwrap_or("").trim_end_matches('/');
+    if host.is_empty() {
+        return Err("未配置服务器地址".into());
+    }
+    let port = if conn.port == 0 { 80 } else { conn.port };
+
+    let addrs: Vec<SocketAddr> = (host, port)
+        .to_socket_addrs()
+        .map_err(|e| format!("域名解析失败：{e}"))?
+        .collect();
+    if addrs.is_empty() {
+        return Err("域名解析失败：没有可用地址".into());
+    }
+
+    let timeout = std::time::Duration::from_secs(timeout_secs.max(1));
+    let started = std::time::Instant::now();
+    let mut last_err = String::new();
+    for addr in &addrs {
+        // IPv6 回环不该走外网代理，TcpStream 本来就不经代理，这里保持直连即可
+        match TcpStream::connect_timeout(addr, timeout) {
+            Ok(_) => return Ok(started.elapsed().as_millis() as u64),
+            Err(e) => last_err = format!("{addr}：{e}"),
+        }
+    }
+    Err(format!("端口 {port} 连不上（{last_err}）"))
 }
 
 /// 调本机 rclone 的 rc 接口读统计（只读、2 秒超时，失败就当作没有数据）。

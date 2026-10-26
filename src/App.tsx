@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ConnectionForm from "./ConnectionForm";
 import Dashboard from "./Dashboard";
 import SettingsPanel from "./SettingsPanel";
+import SortBar, { type SortBy, type SortDir } from "./SortBar";
 import StatsPanel from "./StatsPanel";
 import {
   api,
@@ -237,6 +238,59 @@ export default function App() {
     );
   }, [conns, query]);
 
+  const sortBy = (settings?.sort_by ?? "default") as SortBy;
+  const sortDir = (settings?.sort_dir ?? "asc") as SortDir;
+
+  // 排序：名称按中文拼音（Intl.Collator），状态绿→黄→红→灰，分组按组名 A-Z 且未分组置底；
+  // 置顶连接始终排最前。默认排序 = 后端返回顺序（添加顺序）。
+  const sorted = useMemo(() => {
+    const collator = new Intl.Collator("zh-Hans-CN", { numeric: true });
+    const byName = (a: Connection, b: Connection) => collator.compare(a.name, b.name);
+    const dir = sortDir === "desc" ? -1 : 1;
+    const list = [...filtered];
+    if (sortBy === "name") {
+      list.sort((a, b) => dir * byName(a, b));
+    } else if (sortBy === "status") {
+      const rank: Record<string, number> = { healthy: 0, slow: 1, error: 2, stopped: 3 };
+      list.sort((a, b) => {
+        const sa = states[a.id];
+        const sb = states[b.id];
+        const ra = sa?.mounted ? (rank[sa.health] ?? 3) : 3;
+        const rb = sb?.mounted ? (rank[sb.health] ?? 3) : 3;
+        // 倒序只反转绿黄红，灰（已关闭）始终垫底
+        const ka = ra === 3 ? 3 : dir > 0 ? ra : 2 - ra;
+        const kb = rb === 3 ? 3 : dir > 0 ? rb : 2 - rb;
+        return ka - kb || byName(a, b);
+      });
+    } else if (sortBy === "group") {
+      list.sort((a, b) => {
+        const ga = a.group.trim();
+        const gb = b.group.trim();
+        // 未分组无论正序倒序都放最后
+        if (!ga && gb) return 1;
+        if (ga && !gb) return -1;
+        if (!ga && !gb) return byName(a, b);
+        const c = collator.compare(ga, gb);
+        return (dir > 0 ? c : -c) || byName(a, b);
+      });
+    }
+    // 置顶永远在最前面（JS 的 sort 是稳定的，不会打乱上面的次序）
+    list.sort((a, b) => Number(b.pinned) - Number(a.pinned));
+    return list;
+  }, [filtered, states, sortBy, sortDir]);
+
+  // 排序状态写进 settings.json，下次开机保持上次的排序
+  const changeSort = useCallback(
+    (by: SortBy, dir: SortDir) => {
+      setSettings((cur) => (cur ? { ...cur, sort_by: by, sort_dir: dir } : cur));
+      api
+        .saveSettings({ ...(settings ?? ({} as Settings)), sort_by: by, sort_dir: dir })
+        .then((s) => setSettings((cur) => (cur ? { ...cur, ...s } : cur)))
+        .catch(() => undefined);
+    },
+    [settings]
+  );
+
   return (
     <div className="app">
       <aside className="sidebar">
@@ -266,47 +320,62 @@ export default function App() {
           placeholder={t("app.searchPh")}
         />
 
-        <ul className="conn-list">
-          {filtered.map((c) => {
+        <SortBar sortBy={sortBy} sortDir={sortDir} onChange={changeSort} t={t} />
+
+        {/* 点列表的空白处（条目之间的空隙）取消选中，回到首页概览 */}
+        <ul
+          className="conn-list"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setSelected(null);
+          }}
+        >
+          {sorted.map((c, i) => {
             const st = states[c.id];
             const h = healthOf(st, t);
             const busyThis = busy === c.id;
+            // 按分组排序时，每个组的第一条上方压一行组名标题
+            const showGroup =
+              sortBy === "group" &&
+              c.group.trim() !== "" &&
+              sorted.findIndex((p) => p.group.trim() === c.group.trim()) === i;
             return (
-              <li
-                key={c.id}
-                className={`conn ${selected === c.id ? "active" : ""}`}
-                // 再点一次已选中的连接就取消选中，回到首页概览
-                onClick={() => setSelected((prev) => (prev === c.id ? null : c.id))}
-                title={`${c.host}${c.protocol === "s3" ? "" : `:${c.port}`}`}
-              >
-                <span className={h.cls} title={healthTip(st, t)} />
-                <div className="conn-meta">
-                  <span className="conn-name">
-                    {c.pinned && <span className="pin">★</span>}
-                    {c.name}
-                  </span>
-                  <span className="conn-sub">
-                    <span className="tag">{PROTOCOL_META[c.protocol].short}</span>
-                    <span className="tag mono">{c.target}</span>
-                    <span className="conn-user" title={c.user || t("app.anon")}>
-                      {c.user || t("app.anon")}
-                    </span>
-                  </span>
-                </div>
-                <button
-                  className={`row-toggle ${st?.mounted ? "stop" : "start"}`}
-                  disabled={busyThis}
-                  title={st?.mounted ? t("app.stopMount") : t("app.startMount")}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    if (busyThis) return;
-                    if (st?.mounted) void handleUnmount(c);
-                    else void handleMount(c);
-                  }}
+              <Fragment key={c.id}>
+                {showGroup && <li className="group-head">{c.group}</li>}
+                <li
+                  className={`conn ${selected === c.id ? "active" : ""}`}
+                  // 再点一次已选中的连接就取消选中，回到首页概览
+                  onClick={() => setSelected((prev) => (prev === c.id ? null : c.id))}
+                  title={`${c.host}${c.protocol === "s3" ? "" : `:${c.port}`}`}
                 >
-                  {busyThis ? "…" : st?.mounted ? t("app.stop") : t("app.start")}
-                </button>
-              </li>
+                  <span className={h.cls} title={healthTip(st, t)} />
+                  <div className="conn-meta">
+                    <span className="conn-name">
+                      {c.pinned && <span className="pin">★</span>}
+                      {c.name}
+                    </span>
+                    <span className="conn-sub">
+                      <span className="tag">{PROTOCOL_META[c.protocol].short}</span>
+                      <span className="tag mono">{c.target}</span>
+                      <span className="conn-user" title={c.user || t("app.anon")}>
+                        {c.user || t("app.anon")}
+                      </span>
+                    </span>
+                  </div>
+                  <button
+                    className={`row-toggle ${st?.mounted ? "stop" : "start"}`}
+                    disabled={busyThis}
+                    title={st?.mounted ? t("app.stopMount") : t("app.startMount")}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (busyThis) return;
+                      if (st?.mounted) void handleUnmount(c);
+                      else void handleMount(c);
+                    }}
+                  >
+                    {busyThis ? "…" : st?.mounted ? t("app.stop") : t("app.start")}
+                  </button>
+                </li>
+              </Fragment>
             );
           })}
           {filtered.length === 0 && (
@@ -344,7 +413,14 @@ export default function App() {
         </div>
       </aside>
 
-      <main className="main">
+      {/* 点主区真正空白的背景（面板之间的留白）也取消选中回到首页；
+          面板内部的空白（日志区、卡片、图表）有自己的元素，target 不会等于 main，不会误触 */}
+      <main
+        className="main"
+        onClick={(e) => {
+          if (e.target === e.currentTarget) setSelected(null);
+        }}
+      >
         {!current && <Dashboard conns={conns} states={states} t={t} onSelect={setSelected} />}
 
         {current && (
@@ -391,6 +467,10 @@ export default function App() {
                 <div>
                   <label>{t("app.kvTarget")}</label>
                   <span className="mono">{current.target}</span>
+                </div>
+                <div>
+                  <label>{t("cf.group")}</label>
+                  <span>{current.group || t("home.ungrouped")}</span>
                 </div>
                 <div>
                   <label>{current.protocol === "s3" ? t("app.kvAccessKey") : t("app.kvUser")}</label>
@@ -467,7 +547,11 @@ export default function App() {
                 </div>
                 <div>
                   <label>{t("app.proxy")}</label>
-                  <span className="mono">{current.proxy || t("app.notSet")}</span>
+                  <span className="mono">{current.proxy || (current.use_system_proxy ? t("cf.sysProxy") : t("app.notSet"))}</span>
+                </div>
+                <div>
+                  <label>{t("cf.probeMode")}</label>
+                  <span>{t(`pm.probe.${current.probe_mode}`)}</span>
                 </div>
                 <div>
                   <label>{t("app.ignoreCert")}</label>

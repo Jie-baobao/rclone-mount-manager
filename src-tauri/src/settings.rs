@@ -25,6 +25,10 @@ pub struct Settings {
     pub log_max_mb: u64,
     /// 日志保留天数，超期自动清理
     pub log_retention_days: u32,
+    /// 连接列表排序：default（添加顺序）/ name / status / group
+    pub sort_by: String,
+    /// 排序方向：asc / desc（仅对 name / status / group 有意义）
+    pub sort_dir: String,
 }
 
 impl Default for Settings {
@@ -38,6 +42,8 @@ impl Default for Settings {
             error_fails: 3,
             log_max_mb: 5,
             log_retention_days: 30,
+            sort_by: "default".into(),
+            sort_dir: "asc".into(),
         }
     }
 }
@@ -50,6 +56,12 @@ impl Settings {
         self.error_fails = self.error_fails.max(self.warn_fails).clamp(1, 99);
         self.log_max_mb = self.log_max_mb.clamp(1, 500);
         self.log_retention_days = self.log_retention_days.clamp(1, 3650);
+        if !["default", "name", "status", "group"].contains(&self.sort_by.as_str()) {
+            self.sort_by = "default".into();
+        }
+        if self.sort_dir != "desc" {
+            self.sort_dir = "asc".into();
+        }
         Ok(self)
     }
 }

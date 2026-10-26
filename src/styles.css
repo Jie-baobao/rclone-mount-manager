@@ -119,6 +119,56 @@ body {
   flex: none;
 }
 
+/* 排序条：名称 / 状态 / 分组，三选一；选中项变色并带 ↑/↓ */
+.sortbar {
+  display: flex;
+  gap: 6px;
+  flex: none;
+}
+
+.sort-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--muted);
+  border-radius: 999px;
+  padding: 3px 10px;
+  font-size: 12px;
+  cursor: pointer;
+  font-family: inherit;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+}
+
+.sort-chip:hover {
+  border-color: var(--accent, #6c8cff);
+}
+
+.sort-chip.active {
+  background: var(--accent, #6c8cff);
+  border-color: var(--accent, #6c8cff);
+  color: #fff;
+  font-weight: 600;
+}
+
+.sort-chip .arrow {
+  font-size: 11px;
+  line-height: 1;
+}
+
+/* 按分组排序时压在组内第一条上方的组名标题 */
+.group-head {
+  padding: 10px 9px 3px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  opacity: 0.85;
+  border-bottom: 1px dashed var(--border);
+  margin-bottom: 2px;
+}
+
 .conn-list {
   list-style: none;
   margin: 0;

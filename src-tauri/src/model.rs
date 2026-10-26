@@ -99,6 +99,13 @@ pub struct Connection {
     pub auto_mount: bool,
     /// 列表置顶
     pub pinned: bool,
+    /// 分组名（可空）。挂载时拼进卷标：`[组名] 名称`，资源管理器按名称排序自然聚组
+    pub group: String,
+    /// 挂载与探测都走 Windows/macOS 系统代理（默认关）
+    pub use_system_proxy: bool,
+    /// 探测方式：full=完整（真实列目录）/ light=轻量（TCP 连端口）/ process=仅看挂载进程
+    /// 默认 light：不读文件系统，不会唤醒休眠中的硬盘
+    pub probe_mode: String,
     pub created_at: i64,
 }
 
@@ -126,6 +133,9 @@ impl Default for Connection {
             reconnect: true,
             auto_mount: false,
             pinned: false,
+            group: String::new(),
+            use_system_proxy: false,
+            probe_mode: "light".into(),
             created_at: 0,
         }
     }
@@ -200,6 +210,9 @@ pub struct ConnectionInput {
     pub reconnect: bool,
     pub auto_mount: bool,
     pub pinned: bool,
+    pub group: String,
+    pub use_system_proxy: bool,
+    pub probe_mode: String,
 }
 
 impl Default for ConnectionInput {
@@ -227,6 +240,9 @@ impl Default for ConnectionInput {
             reconnect: true,
             auto_mount: false,
             pinned: false,
+            group: String::new(),
+            use_system_proxy: false,
+            probe_mode: "light".into(),
         }
     }
 }

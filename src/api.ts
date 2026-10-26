@@ -35,8 +35,16 @@ export interface Connection {
   reconnect: boolean;
   auto_mount: boolean;
   pinned: boolean;
+  /** 分组名（可空）；挂载时拼进卷标：[组名] 名称 */
+  group: string;
+  /** 挂载与探测走系统代理 */
+  use_system_proxy: boolean;
+  /** 探测方式：full / light（默认，不碰盘）/ process */
+  probe_mode: ProbeMode;
   created_at: number;
 }
+
+export type ProbeMode = "full" | "light" | "process";
 
 export interface ConnectionInput {
   id?: string | null;
@@ -61,6 +69,9 @@ export interface ConnectionInput {
   reconnect: boolean;
   auto_mount: boolean;
   pinned: boolean;
+  group: string;
+  use_system_proxy: boolean;
+  probe_mode: ProbeMode;
 }
 
 export interface MountState {
@@ -136,6 +147,10 @@ export interface Settings {
   error_fails: number;
   log_max_mb: number;
   log_retention_days: number;
+  /** 连接列表排序：default / name / status / group */
+  sort_by: string;
+  /** asc / desc */
+  sort_dir: string;
   /** 仅前端状态：镜像注册表/启动项里的自启动开关（后端 Settings 不含此字段） */
   autostart?: boolean;
 }

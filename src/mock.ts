@@ -38,6 +38,9 @@ const conns: Connection[] = [
     reconnect: true,
     auto_mount: true,
     pinned: true,
+    group: "家庭",
+    use_system_proxy: false,
+    probe_mode: "light",
     created_at: now,
   },
   {
@@ -62,6 +65,9 @@ const conns: Connection[] = [
     reconnect: true,
     auto_mount: false,
     pinned: false,
+    group: "办公",
+    use_system_proxy: true,
+    probe_mode: "light",
     created_at: now - 100,
   },
   {
@@ -86,6 +92,9 @@ const conns: Connection[] = [
     reconnect: false,
     auto_mount: false,
     pinned: false,
+    group: "",
+    use_system_proxy: false,
+    probe_mode: "light",
     created_at: now - 200,
   },
 ];
@@ -146,7 +155,7 @@ function reply(cmd: string, args?: Record<string, unknown>): unknown {
     case "get_env":
       return {
         platform: "windows x86_64",
-        app_version: "0.3.4",
+        app_version: "0.3.5",
         rclone_path: "C:\\Program Files\\Rclone Mount Manager\\resources\\rclone\\rclone.exe",
         rclone_version: "1.75.2",
         rclone_source: "bundled",
@@ -204,6 +213,8 @@ function reply(cmd: string, args?: Record<string, unknown>): unknown {
         error_fails: 3,
         log_max_mb: 5,
         log_retention_days: 30,
+        sort_by: "default",
+        sort_dir: "asc",
       };
     case "save_settings":
       return args?.s;

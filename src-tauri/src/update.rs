@@ -31,9 +31,17 @@ pub struct UpdateReport {
 }
 
 fn client() -> Result<reqwest::blocking::Client, String> {
-    reqwest::blocking::Client::builder()
+    let mut builder = reqwest::blocking::Client::builder()
         .user_agent(UA)
-        .timeout(std::time::Duration::from_secs(30))
+        .timeout(std::time::Duration::from_secs(30));
+    // 更新检测固定跟随系统代理（Windows「Internet 选项」/ 类 Unix 环境变量）：
+    // 更新源在境外，部分网络不开代理连不上
+    if let Some(p) = crate::rclone::system_proxy_url() {
+        if let Ok(proxy) = reqwest::Proxy::all(&p) {
+            builder = builder.proxy(proxy);
+        }
+    }
+    builder
         .build()
         .map_err(|e| format!("创建网络客户端失败：{e}"))
 }
@@ -45,9 +53,41 @@ fn get_text(url: &str) -> Result<String, String> {
         .send()
         .map_err(|e| format!("请求失败：{e}"))?;
     if !resp.status().is_success() {
-        return Err(format!("HTTP {}", resp.status().as_u16()));
+        return Err(friendly_http_error(resp.status().as_u16()));
     }
     resp.text().map_err(|e| format!("读取响应失败：{e}"))
+}
+
+/// 把常见 HTTP 错误翻译成人话，别再甩一个 403 让用户摸不着头脑
+fn friendly_http_error(code: u16) -> String {
+    match code {
+        403 => "GitHub 接口额度已用完（共享出口 IP 的匿名额度是每小时 60 次），\
+            请稍后再试，或直接到发布页查看新版本"
+            .into(),
+        429 => "请求太频繁被限流，请稍后再试".into(),
+        402..=499 => format!("请求被服务器拒绝（HTTP {code}），若在境外网络受限环境，请检查系统代理"),
+        500..=599 => format!("GitHub 服务端异常（HTTP {code}），请稍后再试"),
+        _ => format!("HTTP {code}"),
+    }
+}
+
+/// 走 `github.com/<owner>/<repo>/releases/latest` 的重定向拿最新 tag，
+/// 不消耗 GitHub API 的匿名配额（api.github.com 每出口 IP 每小时只有 60 次）。
+/// reqwest 默认跟随重定向，最终 URL 一定以 /tag/<版本号> 结尾。
+fn latest_via_redirect(page_url: &str) -> Result<String, String> {
+    let resp = client()?
+        .get(page_url)
+        .send()
+        .map_err(|e| format!("请求失败：{e}"))?;
+    if !resp.status().is_success() {
+        return Err(friendly_http_error(resp.status().as_u16()));
+    }
+    let final_url = resp.url().to_string();
+    let tag = final_url.trim_end_matches('/').rsplit('/').next().unwrap_or("");
+    if tag.is_empty() {
+        return Err("未取到版本号".into());
+    }
+    Ok(normalize(tag))
 }
 
 /// 去掉前缀 v，只留数字版本
@@ -92,6 +132,13 @@ fn rclone_latest() -> Result<String, String> {
 }
 
 fn winfsp_latest() -> Result<(String, String), String> {
+    // 优先走重定向（零配额），失败再退回 GitHub API
+    let url = "https://github.com/winfsp/winfsp/releases/latest".to_string();
+    if let Ok(tag) = latest_via_redirect(&url) {
+        if !tag.is_empty() {
+            return Ok((tag, url));
+        }
+    }
     let text = get_text(WINFSP_LATEST_API)?;
     let v: serde_json::Value = serde_json::from_str(&text).map_err(|e| format!("解析失败：{e}"))?;
     let tag = v["tag_name"].as_str().unwrap_or("").to_string();
@@ -106,12 +153,18 @@ fn winfsp_latest() -> Result<(String, String), String> {
 }
 
 fn app_latest() -> Result<(String, String), String> {
+    let fallback_url = "https://github.com/Jie-baobao/rclone-mount-manager/releases".to_string();
+    if let Ok(tag) = latest_via_redirect("https://github.com/Jie-baobao/rclone-mount-manager/releases/latest") {
+        if !tag.is_empty() {
+            return Ok((tag, fallback_url));
+        }
+    }
     let text = get_text(APP_LATEST_API)?;
     let v: serde_json::Value = serde_json::from_str(&text).map_err(|e| format!("解析失败：{e}"))?;
     let tag = v["tag_name"].as_str().unwrap_or("").to_string();
     let url = v["html_url"]
         .as_str()
-        .unwrap_or("https://github.com/Jie-baobao/rclone-mount-manager/releases")
+        .unwrap_or(&fallback_url)
         .to_string();
     if tag.is_empty() {
         return Err("还没发布过版本".into());

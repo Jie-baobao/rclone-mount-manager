@@ -206,6 +206,12 @@ fn to_connection(input: &ConnectionInput, existing: Option<&Connection>) -> Conn
         reconnect: input.reconnect,
         auto_mount: input.auto_mount,
         pinned: existing.map(|c| c.pinned).unwrap_or(input.pinned),
+        group: input.group.trim().to_string(),
+        use_system_proxy: input.use_system_proxy,
+        probe_mode: match input.probe_mode.as_str() {
+            "full" | "light" | "process" => input.probe_mode.clone(),
+            _ => "light".into(),
+        },
         created_at: existing.map(|c| c.created_at).unwrap_or_else(now_secs),
     }
 }
@@ -809,7 +815,28 @@ fn spawn_health_monitor(app: AppHandle) {
                     let Some(conn) = conns.iter().find(|c| c.id == id) else {
                         continue;
                     };
-                    let result = rclone::probe_latency(&app, conn, 8);
+                    // 探测方式（连接表单里可选，默认轻量）：
+                    // full=完整探测（真实列目录，会唤醒休眠硬盘）
+                    // light=轻量（TCP 握手，不碰盘）
+                    // process=仅看挂载进程存活（零网络流量）
+                    let result: Result<u64, String> = match conn.probe_mode.as_str() {
+                        "process" => {
+                            let alive = {
+                                let mut sessions = state.sessions.lock().unwrap();
+                                match sessions.get_mut(&id) {
+                                    Some(s) => s.child.try_wait().map(|st| st.is_none()).unwrap_or(false),
+                                    None => false,
+                                }
+                            };
+                            if alive {
+                                Ok(0)
+                            } else {
+                                Err("挂载进程已退出".into())
+                            }
+                        }
+                        "full" => rclone::probe_latency(&app, conn, 8),
+                        _ => rclone::tcp_probe(conn, 8),
+                    };
                     let ok_ms = result.as_ref().ok().copied();
                     let now = now_secs();
 
@@ -820,19 +847,20 @@ fn spawn_health_monitor(app: AppHandle) {
                     match result {
                         Ok(ms) => {
                             entry.fails = 0;
-                            entry.latency_ms = Some(ms);
+                            // 「仅进程」模式没有网络往返，延迟记成 0 而不是假装有个数字
+                            entry.latency_ms = if conn.probe_mode == "process" { Some(0) } else { Some(ms) };
                             // 单次探测超过阈值 → 黄（网络波动）
                             entry.state = if ms > cfg.latency_threshold_ms {
                                 "slow"
                             } else {
                                 "healthy"
                             };
-                            append_probe_log(
-                                &app,
-                                &id,
-                                &cfg,
-                                &format!("[探测 {}] 正常 · {} ms", timestamp(), ms),
-                            );
+                            let ok_text = if conn.probe_mode == "process" {
+                                format!("[探测 {}] 挂载进程存活", timestamp())
+                            } else {
+                                format!("[探测 {}] 正常 · {} ms", timestamp(), ms)
+                            };
+                            append_probe_log(&app, &id, &cfg, &ok_text);
                         }
                         Err(e) => {
                             entry.fails = entry.fails.saturating_add(1);
