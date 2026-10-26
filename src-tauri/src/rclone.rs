@@ -350,6 +350,7 @@ pub fn build_mount_args(
     app: &AppHandle,
     conn: &Connection,
     log_path: &Path,
+    rc_port: u16,
 ) -> Result<Vec<String>, String> {
     let conf = store::rclone_conf_path(app)?;
     let mut spec = format!("{}:", remote_name(&conn.id));
@@ -378,6 +379,11 @@ pub fn build_mount_args(
         "INFO".into(),
         "--volname".into(),
         conn.name.clone(),
+        // 本机 rc 端口：界面靠它读实时吞吐/传输统计，只绑定回环地址
+        "--rc".into(),
+        "--rc-no-auth".into(),
+        "--rc-addr".into(),
+        format!("127.0.0.1:{rc_port}"),
     ];
 
     let cache = if conn.cache_dir.trim().is_empty() {
@@ -443,9 +449,10 @@ pub fn spawn_mount(
     app: &AppHandle,
     conn: &Connection,
     log_path: &Path,
+    rc_port: u16,
 ) -> Result<Child, String> {
     let rclone = require_rclone(app)?;
-    let args = build_mount_args(app, conn, log_path)?;
+    let args = build_mount_args(app, conn, log_path, rc_port)?;
 
     let mut cmd = command_for(&rclone);
     cmd.args(&args)
@@ -593,10 +600,12 @@ pub fn probe_latency(app: &AppHandle, conn: &Connection, timeout_secs: u64) -> R
     }
 
     let mut cmd = command_for(&rclone);
+    // 只看根目录这一层就够了。注意 --max-depth 0 在 rclone 里表示「不限深度」，
+    // 会递归遍历整棵树（几万个目录），几十秒都跑不完，必然被判超时。
     cmd.arg("lsd")
         .arg(&spec)
         .arg("--max-depth")
-        .arg("0")
+        .arg("1")
         .arg("--config")
         .arg(conf.to_string_lossy().to_string())
         .arg("--timeout")
@@ -610,6 +619,11 @@ pub fn probe_latency(app: &AppHandle, conn: &Connection, timeout_secs: u64) -> R
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .stdin(Stdio::null());
+
+    // 自签证书的场景下挂载能连（挂了 --no-check-certificate），探测也得跟上，否则永远报失败
+    if conn.protocol.is_webdav() && conn.ignore_cert {
+        cmd.arg("--no-check-certificate");
+    }
 
     let proxy = conn.proxy.trim();
     if !proxy.is_empty() {
@@ -652,4 +666,20 @@ pub fn probe_latency(app: &AppHandle, conn: &Connection, timeout_secs: u64) -> R
             Err(e) => return Err(format!("探测失败：{e}")),
         }
     }
+}
+
+/// 调本机 rclone 的 rc 接口读统计（只读、2 秒超时，失败就当作没有数据）。
+/// 走 127.0.0.1 回环，不算外网流量，开销可以忽略。
+pub fn rc_call(port: u16, endpoint: &str) -> Option<serde_json::Value> {
+    if port == 0 {
+        return None;
+    }
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(2))
+        .no_proxy()
+        .build()
+        .ok()?;
+    let url = format!("http://127.0.0.1:{port}/{endpoint}");
+    let resp = client.post(&url).send().ok()?.error_for_status().ok()?;
+    resp.json::<serde_json::Value>().ok()
 }

@@ -4,7 +4,14 @@
  * 只在「不在 Tauri 运行时里」时生效——`npm run dev` 直接用浏览器打开也能看界面，
  * 打包后的应用永远走真实的 Rust 后端。
  */
-import type { Connection, ConnectionInput, DiagResult, EnvInfo, MountState } from "./api";
+import type {
+  Connection,
+  ConnectionInput,
+  DiagResult,
+  EnvInfo,
+  MountState,
+  Stats,
+} from "./api";
 
 const now = Math.floor(Date.now() / 1000);
 
@@ -168,6 +175,19 @@ function reply(cmd: string, args?: Record<string, unknown>): unknown {
       );
     case "read_log":
       return LOG;
+    case "get_stats":
+      return {
+        speed_bps: 1_843_200,
+        peak_bps: 5_242_880,
+        total_bytes: 734_003_200,
+        transfers: 128,
+        errors: 0,
+        elapsed_secs: 1620,
+        probes_ok: 96,
+        probes_fail: 4,
+        latency_ms: 41,
+        history: [38, 42, 40, 45, 39, 0, 44, 41, 43, 40, 0, 46, 42, 39, 41, 44, 40, 43, 41, 38, 42, 45, 40, 41],
+      } satisfies Stats;
     case "get_autostart":
       return true;
     case "get_settings":

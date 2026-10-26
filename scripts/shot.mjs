@@ -11,6 +11,12 @@ await page.goto(url, { waitUntil: "networkidle" });
 await page.waitForTimeout(600);
 await page.screenshot({ path: "docs/screenshots/main.png" });
 
+// 详情页（含「节点概况」统计面板），需要更高一点的视口
+await page.setViewportSize({ width: 1180, height: 900 });
+await page.waitForTimeout(300);
+await page.screenshot({ path: "docs/screenshots/detail-stats.png" });
+await page.setViewportSize({ width: 1180, height: 760 });
+
 // 设置页上半部分（通用 / 启动 / 探测规则 / 日志）
 await page.locator(".sidebar-foot button.btn.ghost").click();
 await page.waitForTimeout(400);

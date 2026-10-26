@@ -22,6 +22,8 @@ pub struct Session {
     child: Child,
     started: Instant,
     restarts: u32,
+    /// 该挂载进程的 rc 端口，界面靠它读实时吞吐
+    rc_port: u16,
 }
 
 /// 一次健康探测的结果
@@ -46,12 +48,49 @@ impl Default for Health {
     }
 }
 
+/// 一个连接本次挂载期间的统计数据，详情页「节点历史」直接展示这个
+#[derive(Clone, Default, serde::Serialize)]
+pub struct StatsSnapshot {
+    /// 最近一次采样的实时吞吐（字节/秒，读写合计）
+    pub speed_bps: u64,
+    /// 本次挂载的峰值吞吐
+    pub peak_bps: u64,
+    /// 本次已传输总量
+    pub total_bytes: u64,
+    /// 累计传输次数 / rclone 报告的传输错误数
+    pub transfers: u64,
+    pub errors: u64,
+    /// 挂载进程已运行秒数
+    pub elapsed_secs: u64,
+    /// 探测成功 / 失败次数
+    pub probes_ok: u64,
+    pub probes_fail: u64,
+    pub latency_ms: Option<u64>,
+    /// 最近 40 次探测的延迟（0 表示这次失败），前端画折线用
+    pub history: Vec<u32>,
+    /// 上一次采样的字节数，用来算瞬时速度（不落前端）
+    #[serde(skip)]
+    pub last_bytes: u64,
+}
+
+impl StatsSnapshot {
+    fn push_history(&mut self, ms: Option<u64>) {
+        self.history.push(ms.unwrap_or(0).min(u32::MAX as u64) as u32);
+        if self.history.len() > 40 {
+            let drop = self.history.len() - 40;
+            self.history.drain(0..drop);
+        }
+    }
+}
+
 pub struct AppState {
     sessions: Mutex<HashMap<String, Session>>,
     /// 每个连接最近一次失败原因（挂载日志尾部）
     errors: Mutex<HashMap<String, String>>,
     /// 每个已挂载连接的健康状况（主动探测得来）
     health: Mutex<HashMap<String, Health>>,
+    /// 每个已挂载连接的实时统计（rc 采样 + 探测结果汇总）
+    stats: Mutex<HashMap<String, StatsSnapshot>>,
     /// 托盘是否创建成功：成功时关闭窗口改为"隐藏到托盘"
     tray_ready: AtomicBool,
 }
@@ -62,6 +101,7 @@ impl Default for AppState {
             sessions: Mutex::new(HashMap::new()),
             errors: Mutex::new(HashMap::new()),
             health: Mutex::new(HashMap::new()),
+            stats: Mutex::new(HashMap::new()),
             tray_ready: AtomicBool::new(false),
         }
     }
@@ -170,6 +210,14 @@ fn to_connection(input: &ConnectionInput, existing: Option<&Connection>) -> Conn
     }
 }
 
+/// 找一个空闲的本机端口给 rclone 的 rc 用（向系统要一个临时端口）
+fn free_port() -> u16 {
+    std::net::TcpListener::bind("127.0.0.1:0")
+        .and_then(|l| l.local_addr())
+        .map(|a| a.port())
+        .unwrap_or(0)
+}
+
 /// 启动挂载并把会话登记进状态表
 fn start_session(app: &AppHandle, state: &AppState, conn: &Connection, restarts: u32) -> Result<u32, String> {
     let log_path = store::mount_log_path(app, &conn.id)?;
@@ -177,7 +225,8 @@ fn start_session(app: &AppHandle, state: &AppState, conn: &Connection, restarts:
     // 每次启动都按连接信息重写一遍 remote：老版本写坏的配置（例如把 WebDAV 地址拼成
     // http://5005//192.168.50.4）不用用户重新编辑连接就能自愈。密码沿用已有值。
     let _ = rclone::upsert_remote(app, conn, None);
-    let child = rclone::spawn_mount(app, conn, &log_path)?;
+    let rc_port = free_port();
+    let child = rclone::spawn_mount(app, conn, &log_path, rc_port)?;
     let pid = child.id();
     state.sessions.lock().unwrap().insert(
         conn.id.clone(),
@@ -185,8 +234,15 @@ fn start_session(app: &AppHandle, state: &AppState, conn: &Connection, restarts:
             child,
             started: Instant::now(),
             restarts,
+            rc_port,
         },
     );
+    // 新会话从零开始统计
+    state
+        .stats
+        .lock()
+        .unwrap()
+        .insert(conn.id.clone(), StatsSnapshot::default());
     state.errors.lock().unwrap().remove(&conn.id);
     state.health.lock().unwrap().insert(conn.id.clone(), Health::default());
     Ok(pid)
@@ -212,7 +268,11 @@ fn list_connections(app: AppHandle) -> Vec<Connection> {
 }
 
 #[tauri::command]
-fn save_connection(app: AppHandle, input: ConnectionInput) -> Result<Connection, String> {
+fn save_connection(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    input: ConnectionInput,
+) -> Result<Connection, String> {
     if input.name.trim().is_empty() {
         return Err("请填写连接名称".into());
     }
@@ -246,7 +306,31 @@ fn save_connection(app: AppHandle, input: ConnectionInput) -> Result<Connection,
     }
     store::save_connections(&app, &list)?;
     let _ = app.emit("connections-changed", ());
+
+    // 改完已经在跑：直接重启一次，让地址 / 盘符 / 密码的改动马上生效，
+    // 而不是让用户自己先停再启（改错时也能立刻看到错误）。
+    let was_mounted = state.sessions.lock().unwrap().contains_key(&conn.id);
+    if was_mounted {
+        if let Some(mut session) = state.sessions.lock().unwrap().remove(&conn.id) {
+            let _ = rclone::unmount(&mut session.child, "");
+        }
+        state.health.lock().unwrap().remove(&conn.id);
+        let _ = start_session(&app, state.inner(), &conn, 0);
+        let _ = app.emit("state-changed", ());
+    }
     Ok(conn)
+}
+
+/// 详情页「节点历史」的数据源：本次挂载的吞吐、峰值、探测成功率、延迟曲线
+#[tauri::command]
+fn get_stats(state: State<'_, AppState>, id: String) -> StatsSnapshot {
+    state
+        .stats
+        .lock()
+        .unwrap()
+        .get(&id)
+        .cloned()
+        .unwrap_or_default()
 }
 
 #[tauri::command]
@@ -268,6 +352,7 @@ fn delete_connection(app: AppHandle, state: State<'_, AppState>, id: String) -> 
     }
     state.errors.lock().unwrap().remove(&id);
     state.health.lock().unwrap().remove(&id);
+    state.stats.lock().unwrap().remove(&id);
     let mut list = store::load_connections(&app);
     list.retain(|c| c.id != id);
     store::save_connections(&app, &list)?;
@@ -330,6 +415,7 @@ fn unmount(app: AppHandle, state: State<'_, AppState>, id: String) -> Result<(),
     rclone::unmount(&mut session.child, &target)?;
     state.errors.lock().unwrap().remove(&id);
     state.health.lock().unwrap().remove(&id);
+    state.stats.lock().unwrap().remove(&id);
     let _ = app.emit("state-changed", ());
     Ok(())
 }
@@ -652,6 +738,57 @@ fn spawn_supervisor(app: AppHandle) {
     });
 }
 
+/// 每 5 秒向各挂载进程的本机 rc 端口要一次统计，算出瞬时吞吐。
+/// 只是本机回环上一次很小的 HTTP 请求 + 内存里几个数字，对 CPU / 磁盘基本没有影响。
+fn spawn_stats_monitor(app: AppHandle) {
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_secs(12));
+        loop {
+            std::thread::sleep(Duration::from_secs(5));
+            let state = app.state::<AppState>();
+            let targets: Vec<(String, u16)> = state
+                .sessions
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|(id, s)| (id.clone(), s.rc_port))
+                .collect();
+            if targets.is_empty() {
+                continue;
+            }
+            for (id, port) in targets {
+                let sample = rclone::rc_call(port, "core/stats");
+                let mut guard = state.stats.lock().unwrap();
+                let Some(entry) = guard.get_mut(&id) else { continue };
+                match sample {
+                    Some(v) => {
+                        let bytes = v.get("bytes").and_then(|x| x.as_u64()).unwrap_or(0);
+                        let delta = bytes.saturating_sub(entry.last_bytes);
+                        entry.speed_bps = delta / 5;
+                        if entry.speed_bps > entry.peak_bps {
+                            entry.peak_bps = entry.speed_bps;
+                        }
+                        entry.last_bytes = bytes;
+                        entry.total_bytes = bytes;
+                        if let Some(n) = v.get("totalTransfers").and_then(|x| x.as_u64()) {
+                            entry.transfers = n;
+                        }
+                        if let Some(n) = v.get("errors").and_then(|x| x.as_u64()) {
+                            entry.errors = n;
+                        }
+                        entry.elapsed_secs = v
+                            .get("elapsedTime")
+                            .and_then(|x| x.as_f64())
+                            .unwrap_or(0.0) as u64;
+                    }
+                    // 进程刚起或已退出：速度归零，别把上一次的数字挂着骗人
+                    None => entry.speed_bps = 0,
+                }
+            }
+        }
+    });
+}
+
 /// 周期性主动探测已挂载连接：把「网络波动」变成看得见的黄灯。
 /// 间隔与阈值都能在设置页里调，改动保存后下一轮立即生效。
 fn spawn_health_monitor(app: AppHandle) {
@@ -673,6 +810,7 @@ fn spawn_health_monitor(app: AppHandle) {
                         continue;
                     };
                     let result = rclone::probe_latency(&app, conn, 8);
+                    let ok_ms = result.as_ref().ok().copied();
                     let now = now_secs();
 
                     let mut guard = state.health.lock().unwrap();
@@ -741,6 +879,23 @@ fn spawn_health_monitor(app: AppHandle) {
                         }
                     }
                     entry.last_check = now;
+                    // 顺手把这次探测记进统计：成功率、延迟曲线都从这里来
+                    {
+                        let mut sg = state.stats.lock().unwrap();
+                        let st = sg.entry(id.clone()).or_default();
+                        match ok_ms {
+                            Some(ms) => {
+                                st.probes_ok += 1;
+                                st.latency_ms = Some(ms);
+                                st.push_history(Some(ms));
+                            }
+                            None => {
+                                st.probes_fail += 1;
+                                st.latency_ms = None;
+                                st.push_history(None);
+                            }
+                        }
+                    }
                     if before != (entry.state, entry.latency_ms) {
                         changed = true;
                     }
@@ -835,7 +990,8 @@ pub fn run() {
 
             let handle = app.handle().clone();
             spawn_supervisor(handle.clone());
-            spawn_health_monitor(handle);
+            spawn_health_monitor(handle.clone());
+            spawn_stats_monitor(handle);
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -870,6 +1026,7 @@ pub fn run() {
             open_url,
             get_settings,
             save_settings,
+            get_stats,
             export_connections,
             import_connections
         ])

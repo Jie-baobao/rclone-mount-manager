@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ConnectionForm from "./ConnectionForm";
 import SettingsPanel from "./SettingsPanel";
+import StatsPanel from "./StatsPanel";
 import {
   api,
   events,
@@ -13,6 +14,7 @@ import {
   type EnvInfo,
   type MountState,
   type Settings,
+  type Stats,
 } from "./api";
 import { makeT, resolveLanguage, type T } from "./i18n";
 
@@ -32,6 +34,7 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [log, setLog] = useState("");
+  const [stats, setStats] = useState<Stats | null>(null);
   const [toast, setToast] = useState<Toast | null>(null);
   const [busy, setBusy] = useState<string>("");
   const toastTimer = useRef<number | null>(null);
@@ -114,17 +117,30 @@ export default function App() {
     }
   }, []);
 
-  // 挂载中时自动刷新日志，便于看实时进度
+  const loadStats = useCallback(async (id: string) => {
+    try {
+      setStats(await api.getStats(id));
+    } catch {
+      setStats(null);
+    }
+  }, []);
+
+  // 挂载中时自动刷新日志与统计，便于看实时进度（统计后端 5 秒采一次，这里 4 秒读一次足够）
   useEffect(() => {
     if (!current) {
       setLog("");
+      setStats(null);
       return;
     }
     void loadLog(current.id);
+    void loadStats(current.id);
     if (!currentState?.mounted) return;
-    const timer = window.setInterval(() => void loadLog(current.id), 4000);
+    const timer = window.setInterval(() => {
+      void loadLog(current.id);
+      void loadStats(current.id);
+    }, 4000);
     return () => window.clearInterval(timer);
-  }, [current, currentState?.mounted, loadLog]);
+  }, [current, currentState?.mounted, loadLog, loadStats]);
 
   // 快捷键：Ctrl+N 新建，Ctrl+R 刷新
   useEffect(() => {
@@ -467,6 +483,13 @@ export default function App() {
               </div>
             </details>
 
+            <StatsPanel
+              stats={stats}
+              state={currentState}
+              threshold={settings?.latency_threshold_ms ?? 1200}
+              t={t}
+            />
+
             <section className="panel grow">
               <div className="panel-head">
                 <h3>{t("app.logTitle")}</h3>
@@ -490,14 +513,16 @@ export default function App() {
           t={t}
           onClose={() => setFormOpen(false)}
           onSaved={async (c) => {
-            // 新建连接保存后直接挂载，省掉“再点一次启动”；编辑保持原状态
+            // 新建连接保存后直接挂载，省掉“再点一次启动”；
+            // 编辑时后端会自动重启挂载，这里只补一句提示
             const isNew = !editing;
+            const wasMounted = !!states[c.id]?.mounted;
             setFormOpen(false);
             setEditing(null);
             setSelected(c.id);
             await refresh();
             if (!isNew) {
-              notify("ok", t("toast.saved"));
+              notify("ok", wasMounted ? t("toast.savedReconnect") : t("toast.saved"));
               return;
             }
             setBusy(c.id);

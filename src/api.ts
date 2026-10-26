@@ -76,6 +76,24 @@ export interface MountState {
   last_check: number | null;
 }
 
+/**
+ * 本次挂载的统计数据（后端每 5 秒从 rclone 的本机 rc 端口采一次，只在内存里）。
+ * 注意：speed_bps 是读写合计——rclone 的统计不区分上行/下行。
+ */
+export interface Stats {
+  speed_bps: number;
+  peak_bps: number;
+  total_bytes: number;
+  transfers: number;
+  errors: number;
+  elapsed_secs: number;
+  probes_ok: number;
+  probes_fail: number;
+  latency_ms: number | null;
+  /** 最近 40 次探测延迟，0 表示这次失败 */
+  history: number[];
+}
+
 export interface DiagResult {
   ok: boolean;
   code: number | null;
@@ -134,6 +152,7 @@ export const api = {
   unmountAll: () => call<number>("unmount_all"),
   states: () => call<MountState[]>("mount_states"),
   readLog: (id: string) => call<string>("read_log", { id }),
+  getStats: (id: string) => call<Stats>("get_stats", { id }),
   revealPassword: (id: string) => call<string | null>("reveal_password", { id }),
   openTarget: (id: string) => call<void>("open_target", { id }),
   getAutostart: () => call<boolean>("get_autostart"),
