@@ -207,6 +207,8 @@ export const api = {
   installRclone: (version: string) => call<string>("install_rclone", { version }),
   installWinfsp: () => call<string>("install_winfsp"),
   openUrl: (url: string) => call<void>("open_url", { url }),
+  /** Ctrl+W：关闭主窗口到后台（托盘可用时隐藏，否则最小化），挂载进程不受影响 */
+  hideWindow: () => call<void>("hide_main_window"),
   getSettings: () => call<Settings>("get_settings"),
   saveSettings: (s: Settings) => call<Settings>("save_settings", { s }),
   exportConnections: () => call<string>("export_connections"),

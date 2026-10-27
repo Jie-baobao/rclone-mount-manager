@@ -181,6 +181,7 @@
   "st.export": "Verbindungen exportieren",
   "st.exportNote": "Exportiert eine JSON-Datei; Passwörter im rclone-verschlüsselten Format (nicht im Klartext)",
   "st.exported": "{n} Verbindungen exportiert",
+  "st.hotkeyNote": "Tastenkürzel: Strg+W schickt das Hauptfenster in den Hintergrund, während Einbindungen weiterlaufen; ein Klick auf das Tray-Symbol holt es jederzeit zurück (⌘W unter macOS).",
   "st.import": "Verbindungen importieren",
   "st.importFail": "Import fehlgeschlagen: {e}",
   "st.importNote": "Einträge mit dem Namen einer bestehenden Verbindung werden übersprungen",

@@ -181,6 +181,7 @@
   "st.export": "导出连接配置",
   "st.exportNote": "导出为 JSON 文件；密码以 rclone 混淆格式附带（非明文）",
   "st.exported": "已导出 {n} 个连接的配置",
+  "st.hotkeyNote": "快捷键：Ctrl+W 关闭主窗口并最小化到后台，挂载继续运行；点托盘图标随时唤回（macOS 为 ⌘W）。",
   "st.import": "导入连接配置",
   "st.importFail": "导入失败：{e}",
   "st.importNote": "与现有连接重名的条目会自动跳过",

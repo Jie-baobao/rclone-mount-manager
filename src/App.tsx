@@ -166,6 +166,11 @@ export default function App() {
         e.preventDefault();
         void refresh();
       }
+      // Ctrl+W（macOS ⌘W）：关窗不退出 → 隐藏到托盘后台，挂载继续跑
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "w") {
+        e.preventDefault();
+        void api.hideWindow();
+      }
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);

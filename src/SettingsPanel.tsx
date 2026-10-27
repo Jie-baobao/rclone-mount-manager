@@ -246,6 +246,7 @@ export default function SettingsPanel({
         </label>
       </div>
       <p className="tips">{t("st.silentNote")}</p>
+      <p className="tips">{t("st.hotkeyNote")}</p>
 
       {/* 探测规则 */}
       <h3 className="set-section">{t("st.sectionProbe")}</h3>

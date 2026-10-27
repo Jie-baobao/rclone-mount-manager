@@ -668,6 +668,19 @@ fn open_url(url: String) -> Result<(), String> {
     update::open_url(&url)
 }
 
+/// Ctrl+W / ⌘W：关窗不退出。托盘可用就隐藏到托盘（和点 X 的行为一致），
+/// 托盘没建成就退化为最小化，避免窗口藏起来再也找不回。
+#[tauri::command]
+fn hide_main_window(app: AppHandle) {
+    if let Some(w) = app.get_webview_window("main") {
+        if app.state::<AppState>().tray_ready.load(Ordering::SeqCst) {
+            let _ = w.hide();
+        } else {
+            let _ = w.minimize();
+        }
+    }
+}
+
 // ---------------------------------------------------------------- 设置 / 导入导出
 
 #[tauri::command]
@@ -1153,6 +1166,7 @@ pub fn run() {
             install_rclone,
             install_winfsp,
             open_url,
+            hide_main_window,
             get_settings,
             save_settings,
             get_stats,

@@ -181,6 +181,7 @@
   "st.export": "匯出連線設定",
   "st.exportNote": "匯出為 JSON 檔案；密碼以 rclone 混淆格式附帶（非明文）",
   "st.exported": "已匯出 {n} 個連線的設定",
+  "st.hotkeyNote": "快捷鍵：Ctrl+W 關閉主視窗並最小化到背景，掛載繼續執行；點系統匣圖示隨時喚回（macOS 為 ⌘W）。",
   "st.import": "匯入連線設定",
   "st.importFail": "匯入失敗：{e}",
   "st.importNote": "與現有連線同名的條目會自動略過",

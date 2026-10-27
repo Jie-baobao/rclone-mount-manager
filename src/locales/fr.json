@@ -181,6 +181,7 @@
   "st.export": "Exporter les connexions",
   "st.exportNote": "Exporte un fichier JSON ; les mots de passe sont inclus au format brouillé de rclone (pas en clair)",
   "st.exported": "{n} connexions exportées",
+  "st.hotkeyNote": "Raccourci : Ctrl+W ferme la fenêtre principale en arrière-plan pendant que les montages continuent ; cliquez sur l'icône de la zone de notification pour la rouvrir à tout moment (⌘W sur macOS).",
   "st.import": "Importer des connexions",
   "st.importFail": "Échec de l'import : {e}",
   "st.importNote": "Les entrées portant le nom d'une connexion existante sont ignorées",

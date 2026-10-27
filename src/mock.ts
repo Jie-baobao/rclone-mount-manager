@@ -265,6 +265,7 @@ function reply(cmd: string, args?: Record<string, unknown>): unknown {
     case "unmount":
     case "open_target":
     case "open_url":
+    case "hide_main_window":
     case "delete_connection":
       return null;
     case "mount":

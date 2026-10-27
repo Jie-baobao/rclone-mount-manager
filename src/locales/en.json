@@ -181,6 +181,7 @@
   "st.export": "Export connections",
   "st.exportNote": "Exports a JSON file; passwords are included in rclone-obscured form (not plaintext)",
   "st.exported": "Exported {n} connections",
+  "st.hotkeyNote": "Shortcut: Ctrl+W closes the main window to the background while mounts keep running; click the tray icon to bring it back anytime (⌘W on macOS).",
   "st.import": "Import connections",
   "st.importFail": "Import failed: {e}",
   "st.importNote": "Entries whose name matches an existing connection are skipped",
