@@ -117,11 +117,15 @@ export default function App() {
       })
       .then((un) => unlisteners.push(un));
 
+    // 兜底轮询：挂载状态 + 首页流量合计。
+    // 流量必须放在这里一起拉——挂载中的实际传输只会触发 state-changed，
+    // 不会触发 connections-changed，只在 refresh() 里拉就会一直停在启动时的 0。
     const timer = window.setInterval(() => {
       api
         .states()
         .then((st) => setStates(Object.fromEntries(st.map((s) => [s.id, s]))))
         .catch(() => undefined);
+      api.trafficSummary().then(setTraffic).catch(() => undefined);
     }, 8000);
 
     return () => {
@@ -143,10 +147,14 @@ export default function App() {
     }
   }, []);
 
-  // 详情页是滚动容器：切连接时回到顶部，否则会停在上一条的滚动位置
+  // 详情页是滚动容器：切连接时回到顶部，否则会停在上一条的滚动位置。
+  // 退回首页时顺手把流量合计刷新一次，别让用户看到上一次拉取的旧数字。
   const mainRef = useRef<HTMLElement | null>(null);
   useEffect(() => {
     mainRef.current?.scrollTo({ top: 0 });
+    if (!selected) {
+      api.trafficSummary().then(setTraffic).catch(() => undefined);
+    }
   }, [selected]);
 
   const loadStats = useCallback(async (id: string) => {
