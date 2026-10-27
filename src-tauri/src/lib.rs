@@ -1065,15 +1065,31 @@ fn parse_sendto_args(args: &[String]) -> Option<sendto::SendRequest> {
     Some(sendto::SendRequest { target, files })
 }
 
-/// 收到一次发送请求：存起来（等界面来取）+ 把窗口叫出来 + 发事件给已打开的界面
+/// 收到一次发送请求：存起来（等确认窗来取）+ 只把「发送到」小窗叫出来。
+///
+/// 这里**刻意不碰主窗口**：主界面常常收在托盘里，用户只是想把文件丢到挂载盘，
+/// 不应该为此把整个管理器拽到前台。只有小窗建不起来（极少见）时，
+/// 才退回「显示主窗口 + 主界面内弹确认框」，保证请求不会石沉大海。
 fn queue_sendto(app: &AppHandle, req: sendto::SendRequest) {
     *app.state::<AppState>().send_req.lock().unwrap() = Some(req.clone());
-    if let Some(w) = app.get_webview_window("main") {
-        let _ = w.show();
-        let _ = w.unminimize();
-        let _ = w.set_focus();
+
+    match sendto::show_window(app) {
+        // 新建：页面加载完会自己 sendto_take，不用再推事件
+        Ok(true) => {}
+        // 已经开着：直接把新请求推给它，前面那次传输的结果面板会被替换
+        Ok(false) => {
+            let _ = app.emit_to(sendto::WINDOW_LABEL, "sendto-request", req);
+        }
+        // 退路：小窗建不起来，至少别让用户以为没反应
+        Err(_) => {
+            if let Some(w) = app.get_webview_window("main") {
+                let _ = w.show();
+                let _ = w.unminimize();
+                let _ = w.set_focus();
+            }
+            let _ = app.emit_to("main", "sendto-request", req);
+        }
     }
-    let _ = app.emit("sendto-request", req);
 }
 
 /// 界面启动后主动来取一次：处理「本应用还没运行时就点了发送到」的情况
@@ -1121,6 +1137,19 @@ fn sendto_run(
 #[tauri::command]
 fn sendto_cancel() {
     sendto::cancel();
+}
+
+/// 「发送到」小窗首帧画完了：这时才显示，避免先白屏再出现内容
+#[tauri::command]
+fn sendto_window_ready(window: tauri::Window) {
+    let _ = window.show();
+    let _ = window.set_focus();
+}
+
+/// 关掉「发送到」小窗自己（不走系统关闭按钮，免得和托盘的「关闭=隐藏」混在一起）
+#[tauri::command]
+fn sendto_window_close(window: tauri::Window) {
+    let _ = window.close();
 }
 
 // ---------------------------------------------------------------- 后台看护
@@ -1544,12 +1573,14 @@ pub fn run() {
             sync_sendto_menu(app.handle());
 
             let argv: Vec<String> = std::env::args().collect();
+            let pending = parse_sendto_args(&argv);
 
             // 静默启动：仅当「通过开机自启动拉起（--silent）」且设置勾选了静默时，
             // 才不弹主界面；手动双击图标永远显示窗口。
+            // 由「发送到」拉起的进程也不弹主界面——用户要的是那个小确认窗，不是一个管理器。
             let silent_arg = argv.iter().any(|a| a.as_str() == "--silent");
             let silent = silent_arg && settings::load(app.handle()).silent_start;
-            if !silent {
+            if !silent && pending.is_none() {
                 if let Some(w) = app.get_webview_window("main") {
                     let _ = w.show();
                     let _ = w.set_focus();
@@ -1557,8 +1588,7 @@ pub fn run() {
             }
 
             // 本应用没在跑的时候点了「发送到」：文件和目标盘就在自己的命令行里
-            // （queue_sendto 会把窗口叫出来，不受上面的 silent 影响）
-            if let Some(req) = parse_sendto_args(&argv) {
+            if let Some(req) = pending {
                 queue_sendto(app.handle(), req);
             }
 
@@ -1570,6 +1600,10 @@ pub fn run() {
         })
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                // 只有主窗口「关闭 = 收进托盘」；「发送到」小窗关掉就该销毁
+                if window.label() != "main" {
+                    return;
+                }
                 let state = window.app_handle().state::<AppState>();
                 if state.tray_ready.load(Ordering::SeqCst) {
                     api.prevent_close();
@@ -1614,6 +1648,8 @@ pub fn run() {
             sendto_recent,
             sendto_run,
             sendto_cancel,
+            sendto_window_ready,
+            sendto_window_close,
             open_path
         ])
         .build(tauri::generate_context!())

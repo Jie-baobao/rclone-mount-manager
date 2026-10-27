@@ -344,5 +344,6 @@
   "sendto.notifyFail": "Terminé : {ok} réussi(s), {failed} échoué(s)",
   "st.sectionShell": "Intégration à l'Explorateur",
   "st.sendto": "Afficher les lecteurs montés dans le menu « Envoyer vers »",
-  "st.sendtoNote": "Une fois activé, un clic droit sur un fichier → Envoyer vers liste vos connexions montées (ex. « [Travail] NAS-Vidéo (lecteur Z) »). Choisissez un dossier, puis copiez ou déplacez. La destination reçoit de vrais fichiers, jamais de raccourcis. Désactiver cette option supprime immédiatement les entrées du menu. Cliquez sur Enregistrer pour appliquer."
+  "st.sendtoNote": "Une fois activé, un clic droit sur un fichier → Envoyer vers liste vos connexions montées (ex. « [Travail] NAS-Vidéo (lecteur Z) »). Choisissez un dossier, puis copiez ou déplacez. La destination reçoit de vrais fichiers, jamais de raccourcis. Désactiver cette option supprime immédiatement les entrées du menu. Cliquez sur Enregistrer pour appliquer.",
+  "sendto.preparing": "Préparation de la fenêtre de confirmation…"
 }

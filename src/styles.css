@@ -1744,3 +1744,45 @@ input::-webkit-credentials-auto-fill-button {
 .grow-left {
   margin-right: auto;
 }
+
+/* ------------------- 「发送到」独立小窗（只有确认框，不含管理器主体） */
+.sendto-window {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+}
+
+.sendto-waiting {
+  margin: auto;
+}
+
+/* 小窗里不画遮罩、不居中，卡片直接铺满窗口；顶栏和底栏固定，中间滚动 */
+.modal.bare {
+  width: 100%;
+  max-width: none;
+  height: 100vh;
+  max-height: 100vh;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.modal.bare .modal-body {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.modal.bare .sendto {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+/* 多出来的高度给目录列表，别让底部留一大片空白 */
+.modal.bare .dir-list {
+  flex: 1 1 auto;
+  max-height: none;
+  min-height: 108px;
+}

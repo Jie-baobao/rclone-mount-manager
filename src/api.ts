@@ -319,6 +319,10 @@ export const api = {
   sendtoRun: (sources: string[], dest: string, target: string, mode: "copy" | "move") =>
     call<void>("sendto_run", { sources, dest, target, mode }),
   sendtoCancel: () => call<void>("sendto_cancel"),
+  /** 「发送到」小窗首帧画好，可以显示了（后端先隐藏建窗，避免白闪） */
+  sendtoWindowReady: () => call<void>("sendto_window_ready"),
+  /** 关掉「发送到」小窗本身（区别于主窗口的「关闭 = 收进托盘」） */
+  sendtoWindowClose: () => call<void>("sendto_window_close"),
 };
 
 /** 后端主动推送的事件 */

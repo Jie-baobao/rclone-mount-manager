@@ -344,5 +344,6 @@
   "sendto.notifyFail": "Beendet: {ok} erfolgreich, {failed} fehlgeschlagen",
   "st.sectionShell": "Explorer-Integration",
   "st.sendto": "Gemountete Laufwerke im Menü „Senden an“ anzeigen",
-  "st.sendtoNote": "Wenn aktiviert, listet ein Rechtsklick auf eine Datei → Senden an Ihre gemounteten Verbindungen auf (z. B. „[Arbeit] NAS-Video (Laufwerk Z)“). Ordner wählen, dann kopieren oder verschieben. Am Ziel landen echte Dateien, niemals Verknüpfungen. Beim Ausschalten verschwinden die Menüeinträge sofort. Zum Übernehmen auf Speichern klicken."
+  "st.sendtoNote": "Wenn aktiviert, listet ein Rechtsklick auf eine Datei → Senden an Ihre gemounteten Verbindungen auf (z. B. „[Arbeit] NAS-Video (Laufwerk Z)“). Ordner wählen, dann kopieren oder verschieben. Am Ziel landen echte Dateien, niemals Verknüpfungen. Beim Ausschalten verschwinden die Menüeinträge sofort. Zum Übernehmen auf Speichern klicken.",
+  "sendto.preparing": "Bestätigungsfenster wird vorbereitet…"
 }

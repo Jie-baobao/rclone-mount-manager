@@ -93,20 +93,16 @@ export default function App() {
     }
   }, [notify]);
 
-  // 初次加载：设置（含开机自启动开关）+ 环境 + 连接 + 可能已经攒下的「发送到」请求
+  // 初次加载：设置（含开机自启动开关）+ 环境 + 连接
   useEffect(() => {
     refreshEnv();
     Promise.all([api.getSettings(), api.getAutostart().catch(() => false)])
       .then(([s, autostart]) => setSettings({ ...s, autostart }))
       .catch(() => setSettings(null));
     refresh();
-    // 双击「发送到」时应用可能刚被拉起，事件早于界面挂载，所以主动取一次
-    api
-      .sendtoTake()
-      .then((r) => {
-        if (r) setSendReq(r);
-      })
-      .catch(() => undefined);
+    // 注意：这里不再主动取「发送到」请求。请求的归属是那个独立小窗，
+    // 主窗口也去取就会在小窗打开前把请求抢走，变成主界面弹框。
+    // 只有小窗建不起来时后端才会把请求推到主窗口（走下面的 onSendtoRequest）。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

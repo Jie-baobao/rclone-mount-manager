@@ -20,7 +20,41 @@ use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
+
+// ---------------------------------------------------------------- 确认窗口
+
+/// 「发送到」确认窗的 label（和主窗口区分开）
+pub const WINDOW_LABEL: &str = "sendto";
+
+/// 创建或唤出确认小窗，返回 `true` 表示这次是新建的。
+///
+/// 关键点：**不发不显示主窗口**。用户从资源管理器发文件过来时，主界面可能
+/// 正收在托盘里，为了问他「放到哪个目录」把整个管理器拽到前台是很粗暴的。
+/// 新建的窗口先 `visible(false)`，等前端首帧渲染完再自己显示，避免白闪。
+pub fn show_window(app: &AppHandle) -> Result<bool, String> {
+    if let Some(w) = app.get_webview_window(WINDOW_LABEL) {
+        let _ = w.unminimize();
+        let _ = w.show();
+        let _ = w.set_focus();
+        return Ok(false);
+    }
+
+    tauri::WebviewWindowBuilder::new(app, WINDOW_LABEL, tauri::WebviewUrl::App("index.html".into()))
+        .title("发送到")
+        // 用初始化脚本打标记而不是 ?sendto=1：URL 里的查询串会被资源路径解析吃掉，
+        // 而这个标记在页面脚本之前写入，前端一启动就能确定自己该渲染哪个界面。
+        .initialization_script("window.__RMM_SENDTO__ = 1;")
+        .inner_size(720.0, 680.0)
+        .min_inner_size(540.0, 460.0)
+        .center()
+        .resizable(true)
+        .visible(false)
+        .build()
+        .map_err(|e| format!("无法打开「发送到」窗口：{e}"))?;
+
+    Ok(true)
+}
 
 // ---------------------------------------------------------------- 数据结构
 

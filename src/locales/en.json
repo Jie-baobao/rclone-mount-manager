@@ -344,5 +344,6 @@
   "sendto.notifyFail": "Finished: {ok} succeeded, {failed} failed",
   "st.sectionShell": "File Explorer integration",
   "st.sendto": "Show mounted drives in the “Send to” menu",
-  "st.sendtoNote": "When enabled, right-clicking a file → Send to lists your mounted connections (e.g. “[Work] NAS-Video (Z drive)”). Pick a folder, then copy or move. The destination receives real files, never shortcuts. Turning this off removes the menu entries immediately. Click Save to apply."
+  "st.sendtoNote": "When enabled, right-clicking a file → Send to lists your mounted connections (e.g. “[Work] NAS-Video (Z drive)”). Pick a folder, then copy or move. The destination receives real files, never shortcuts. Turning this off removes the menu entries immediately. Click Save to apply.",
+  "sendto.preparing": "Preparing the confirmation window…"
 }

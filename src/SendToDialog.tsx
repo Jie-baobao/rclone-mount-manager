@@ -39,12 +39,15 @@ export default function SendToDialog({
   t,
   onClose,
   notify,
+  standalone = false,
 }: {
   req: SendRequest;
   connName: string;
   t: T;
   onClose: () => void;
   notify: (kind: "ok" | "bad", text: string) => void;
+  /** 独立小窗：铺满窗口，不再套遮罩 */
+  standalone?: boolean;
 }) {
   const [dest, setDest] = useState(() => rootOf(req.target));
   const [pathInput, setPathInput] = useState(() => rootOf(req.target));
@@ -157,6 +160,7 @@ export default function SendToDialog({
       footer={footer}
       size="sendto"
       closeLabel={t("sendto.close")}
+      bare={standalone}
     >
       <div className="sendto">
         <div className="sendto-files">

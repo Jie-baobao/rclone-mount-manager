@@ -300,11 +300,21 @@ function reply(cmd: string, args?: Record<string, unknown>): unknown {
     case "hide_main_window":
     case "sendto_run":
     case "sendto_cancel":
+    case "sendto_window_ready":
+    case "sendto_window_close":
     case "delete_connection":
       return null;
-    // 浏览器预览里没有「发送到」入口，这几个只保证界面能正常渲染
+    // 浏览器预览里没有资源管理器入口，只有直接访问 ?sendto=1 时才给一份示例数据
     case "sendto_take":
-      return null;
+      return new URLSearchParams(location.search).get("sendto") === "1"
+        ? {
+            target: "Z:",
+            files: [
+              "C:\\Users\\alice\\Videos\\旅行记录.mp4",
+              "C:\\Users\\alice\\Videos\\封面.jpg",
+            ],
+          }
+        : null;
     case "sendto_recent":
       return ["Z:\\电影", "Z:\\备份\\2024"];
     case "sendto_dirs": {
