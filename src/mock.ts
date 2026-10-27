@@ -158,7 +158,7 @@ function reply(cmd: string, args?: Record<string, unknown>): unknown {
     case "get_env":
       return {
         platform: "windows x86_64",
-        app_version: "0.3.6",
+        app_version: "0.3.7",
         rclone_path: "C:\\Program Files\\Rclone Mount Manager\\resources\\rclone\\rclone.exe",
         rclone_version: "1.75.2",
         rclone_source: "bundled",
