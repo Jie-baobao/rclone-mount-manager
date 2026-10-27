@@ -224,6 +224,44 @@ export interface Settings {
   sort_dir: string;
   /** 仅前端状态：镜像注册表/启动项里的自启动开关（后端 Settings 不含此字段） */
   autostart?: boolean;
+  /** 在资源管理器「发送到」菜单里为已挂载的连接生成入口（Windows，默认开） */
+  sendto_enabled: boolean;
+}
+
+/** 「发送到」请求：资源管理器点菜单时传进来的目标盘符和文件 */
+export interface SendRequest {
+  target: string;
+  files: string[];
+}
+
+export interface DirEntry {
+  name: string;
+  path: string;
+}
+
+/** 传输进度事件 */
+export interface SendProgress {
+  /** planning / copying / done */
+  phase: string;
+  done_bytes: number;
+  total_bytes: number;
+  done_files: number;
+  total_files: number;
+  current: string;
+}
+
+/** 传输结果事件 */
+export interface SendReport {
+  ok: boolean;
+  /** copy / move */
+  mode: string;
+  dest: string;
+  bytes: number;
+  copied: number;
+  skipped: number;
+  failed: number;
+  details: string[];
+  error: string;
 }
 
 export const api = {
@@ -250,6 +288,8 @@ export const api = {
   probeNow: (id: string) => call<number>("probe_now", { id }),
   revealPassword: (id: string) => call<string | null>("reveal_password", { id }),
   openTarget: (id: string) => call<void>("open_target", { id }),
+  /** 直接在系统文件管理器里打开任意目录 */
+  openPath: (path: string) => call<void>("open_path", { path }),
   getAutostart: () => call<boolean>("get_autostart"),
   setAutostart: (enable: boolean) => call<void>("set_autostart", { enable }),
   test: (input: ConnectionInput) => call<DiagResult>("test_connection", { input }),
@@ -267,6 +307,18 @@ export const api = {
     call<string>("export_connections", { password: password ?? null }),
   importConnections: (data: string, password?: string) =>
     call<number>("import_connections", { data, password: password ?? null }),
+
+  // ---- 「发送到」菜单 ----
+  /** 取走待处理的发送请求（应用刚启动、界面还没挂好时可能错过事件） */
+  sendtoTake: () => call<SendRequest | null>("sendto_take"),
+  /** 列某个目录下的子目录，给「选目标位置」用 */
+  sendtoDirs: (path: string) => call<DirEntry[]>("sendto_dirs", { path }),
+  /** 某个盘最近发送到过的目录 */
+  sendtoRecent: (target: string) => call<string[]>("sendto_recent", { target }),
+  /** 开始复制/移动（后台跑，进度和结果走事件） */
+  sendtoRun: (sources: string[], dest: string, target: string, mode: "copy" | "move") =>
+    call<void>("sendto_run", { sources, dest, target, mode }),
+  sendtoCancel: () => call<void>("sendto_cancel"),
 };
 
 /** 后端主动推送的事件 */
@@ -280,6 +332,13 @@ export const events = {
   /** 后端要求弹系统通知（挂载失败 / 重连放弃），文案由前端本地化 */
   onNotify: (cb: (payload: NotifyPayload) => void): Promise<UnlistenFn> =>
     isMock() ? mockListen() : listen<NotifyPayload>("notify", (e) => cb(e.payload)),
+  /** 收到「发送到」请求（资源管理器点了菜单项） */
+  onSendtoRequest: (cb: (req: SendRequest) => void): Promise<UnlistenFn> =>
+    isMock() ? mockListen() : listen<SendRequest>("sendto-request", (e) => cb(e.payload)),
+  onSendtoProgress: (cb: (p: SendProgress) => void): Promise<UnlistenFn> =>
+    isMock() ? mockListen() : listen<SendProgress>("sendto-progress", (e) => cb(e.payload)),
+  onSendtoDone: (cb: (r: SendReport) => void): Promise<UnlistenFn> =>
+    isMock() ? mockListen() : listen<SendReport>("sendto-done", (e) => cb(e.payload)),
 };
 
 /** 后端推送的通知请求 */

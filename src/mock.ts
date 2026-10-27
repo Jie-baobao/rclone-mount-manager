@@ -247,6 +247,7 @@ function reply(cmd: string, args?: Record<string, unknown>): unknown {
         log_retention_days: 30,
         sort_by: "default",
         sort_dir: "asc",
+        sendto_enabled: true,
       };
     case "save_settings":
       return args?.s;
@@ -295,9 +296,25 @@ function reply(cmd: string, args?: Record<string, unknown>): unknown {
     case "unmount":
     case "open_target":
     case "open_url":
+    case "open_path":
     case "hide_main_window":
+    case "sendto_run":
+    case "sendto_cancel":
     case "delete_connection":
       return null;
+    // 浏览器预览里没有「发送到」入口，这几个只保证界面能正常渲染
+    case "sendto_take":
+      return null;
+    case "sendto_recent":
+      return ["Z:\\电影", "Z:\\备份\\2024"];
+    case "sendto_dirs": {
+      const p = String(args?.path ?? "Z:\\");
+      return [
+        { name: "电影", path: `${p}电影` },
+        { name: "剧集", path: `${p}剧集` },
+        { name: "备份", path: `${p}备份` },
+      ];
+    }
     case "mount":
       return {
         id: (args?.id as string) ?? "",

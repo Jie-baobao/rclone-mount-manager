@@ -1553,3 +1553,194 @@ input::-webkit-credentials-auto-fill-button {
   line-height: 1;
   cursor: help;
 }
+
+/* ------------------------- 「发送到」确认窗 */
+.modal.sendto {
+  width: min(700px, 100%);
+}
+
+.sendto {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.sendto-files {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg);
+  padding: 9px 12px;
+}
+
+.sendto-files-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 6px;
+  font-size: 12px;
+}
+
+.sendto-files ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 96px;
+  overflow-y: auto;
+}
+
+.sendto-files li {
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+.sendto-path {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.field-label {
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+.sendto-recent {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.chip {
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text);
+  border-radius: 999px;
+  padding: 3px 10px;
+  font-size: 11.5px;
+  cursor: pointer;
+  max-width: 190px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chip:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.chip:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.dir-list {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  max-height: 190px;
+  overflow-y: auto;
+  padding: 4px;
+}
+
+.dir-list p {
+  margin: 8px;
+}
+
+.dir-item {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 12.5px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.dir-item:hover {
+  background: var(--accent-weak);
+}
+
+.dir-icon {
+  flex: 0 0 auto;
+  font-size: 12px;
+  line-height: 1;
+  opacity: 0.85;
+}
+
+.sendto-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.sendto-progress .bar {
+  height: 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--muted) 18%, transparent);
+  overflow: hidden;
+}
+
+.sendto-progress .bar > span {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.2s linear;
+}
+
+.sendto-report {
+  border-radius: 10px;
+  padding: 9px 12px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+}
+
+.sendto-report.ok {
+  border-color: color-mix(in srgb, var(--ok) 45%, var(--border));
+}
+
+.sendto-report.bad {
+  border-color: color-mix(in srgb, var(--danger) 45%, var(--border));
+}
+
+.sendto-report p {
+  margin: 0;
+  font-size: 12.5px;
+}
+
+.sendto-report details {
+  margin-top: 6px;
+}
+
+.sendto-report summary {
+  cursor: pointer;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+.sendto-report ul {
+  margin: 6px 0 0;
+  padding-left: 16px;
+  max-height: 150px;
+  overflow-y: auto;
+}
+
+.sendto-report li {
+  font-size: 11px;
+  color: var(--muted);
+  word-break: break-all;
+}
+
+.grow-left {
+  margin-right: auto;
+}

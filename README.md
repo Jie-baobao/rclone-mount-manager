@@ -94,6 +94,20 @@
   也没有公开 API 能给盘符标组——所以这里用卷标前缀这个折中办法
 - 卷名在挂载那一刻定死：**改组名 / 改名称后要重新挂载**才会刷新（保存连接会自动重连，不用手动操作）
 
+### 发送到：把本地文件丢进挂载盘
+
+已挂载的连接会自动出现在资源管理器的**右键 → 发送到**里，名字形如 `[工作] NAS-视频 (Z盘)`。
+点一下弹出确认窗：可以进子目录、点最近用过的位置，然后选「复制到此处」或「移动到此处」。
+传输带进度条、可中途取消；结束后弹系统通知，一键打开目标目录。
+
+- 目标盘里落地的是**真文件**。`.lnk` 只存在于 `%APPDATA%\Microsoft\Windows\SendTo`，那就是菜单项本身；
+  点下去之后资源管理器把真实文件路径作为参数传给我们，复制过去的是字节级文件，不是快捷方式。
+- 同名文件**跳过而不是覆盖**，跳过和失败都逐条列在结果明细里。
+- 移动 = 复制成功后再删源。只要有一个文件被跳过或失败，就**不会**删源目录（否则等于丢数据）。
+- 盘符带冒号不能进文件名，所以菜单文字写 `(Z盘)`，真正的盘符走快捷方式参数 `--sendto "Z:"`。
+- 一次选多个文件时资源管理器会拉起多个进程，单实例机制把参数合并到同一个窗口，不会各拷一份。
+- 菜单项只在连接**真正挂载着**时出现，卸载或删除后自动消失；设置 → 资源管理器集成可以整体关掉（默认开启）。
+
 ### 节点概况：这次挂载到底怎么样
 
 详情页在日志上方有一块「节点概况」，可以像「高级设置」一样折叠（折叠状态会记住）。
@@ -159,6 +173,7 @@
 - **连接配置导入 / 导出**：换机器、重装系统都不用手动重建；密码以 rclone 混淆格式随文件带走，不是明文。
   导出时还可以**选口令加密**（PBKDF2 + AES-256-GCM），文件要发给别人或放网盘时建议开启
 - **挂载失败弹系统通知**：手动挂载失败或自动重连放弃时，Windows 右下角弹通知，不用盯界面
+- **资源管理器「发送到」**：右键文件就能选目标盘、选目录，复制或移动过去（见上文），可在设置里关掉
 - **每连接自定义 rclone 参数**：高级设置里追加 `--transfers` 等额外参数，管理器控制的参数会被拒绝
 - **诊断信息一键复制**：版本 / 依赖 / 设置 / 各连接最近错误打包成文本（不含密码），求助直接粘贴
 - 连接置顶、搜索过滤（名称 / 地址 / 盘符 / 用户名）、`Ctrl+N` 新建、`Ctrl+R` 刷新、
@@ -168,20 +183,20 @@
 
 <table>
 <tr>
+<td><img src="docs/screenshots/sendto.png" alt="发送到：选目标目录"></td>
 <td><img src="docs/screenshots/new-connection.png" alt="新建连接"></td>
+</tr>
+<tr>
 <td><img src="docs/screenshots/s3-form.png" alt="S3 兼容对象存储"></td>
-</tr>
-<tr>
 <td><img src="docs/screenshots/settings.png" alt="设置：探测规则与语言"></td>
+</tr>
+<tr>
 <td><img src="docs/screenshots/settings-deps.png" alt="设置：依赖与数据"></td>
-</tr>
-<tr>
 <td><img src="docs/screenshots/detail-stats.png" alt="详情页：节点概况与延迟趋势"></td>
-<td><img src="docs/screenshots/fr-home.png" alt="Français 界面"></td>
 </tr>
 <tr>
+<td><img src="docs/screenshots/fr-home.png" alt="Français 界面"></td>
 <td><img src="docs/screenshots/de-home.png" alt="Deutsch 界面"></td>
-<td><img src="docs/screenshots/detail-dark.png" alt="深色模式"></td>
 </tr>
 </table>
 

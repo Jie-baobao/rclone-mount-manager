@@ -3,6 +3,7 @@ mod crypt;
 mod diag;
 mod model;
 mod rclone;
+mod sendto;
 mod settings;
 mod store;
 mod update;
@@ -109,6 +110,10 @@ pub struct AppState {
     stats: Mutex<HashMap<String, StatsSnapshot>>,
     /// 上传/下载账本（按连接 id），每 5 秒采样时累加，定期落盘
     traffic: Mutex<HashMap<String, TrafficDay>>,
+    /// 「发送到」待处理请求：资源管理器传进来的文件在这里等着界面来取。
+    /// 存一份而不是只发事件，是因为窗口可能还在托盘里、或者界面尚未加载完，
+    /// 只发事件会直接丢掉这次请求。
+    send_req: Mutex<Option<sendto::SendRequest>>,
     /// 托盘是否创建成功：成功时关闭窗口改为"隐藏到托盘"
     tray_ready: AtomicBool,
 }
@@ -121,6 +126,7 @@ impl Default for AppState {
             health: Mutex::new(HashMap::new()),
             stats: Mutex::new(HashMap::new()),
             traffic: Mutex::new(HashMap::new()),
+            send_req: Mutex::new(None),
             tray_ready: AtomicBool::new(false),
         }
     }
@@ -430,6 +436,8 @@ fn save_connection(
         let _ = start_session(&app, state.inner(), &conn, 0);
         let _ = app.emit("state-changed", ());
     }
+    // 名字/分组/盘符都可能改了，菜单文字要跟着变
+    sync_sendto_menu(&app);
     Ok(conn)
 }
 
@@ -548,6 +556,7 @@ fn delete_connection(app: AppHandle, state: State<'_, AppState>, id: String) -> 
     store::save_connections(&app, &list)?;
     rclone::remove_remote(&app, &id)?;
     let _ = app.emit("connections-changed", ());
+    sync_sendto_menu(&app);
     Ok(())
 }
 
@@ -596,6 +605,8 @@ fn mount(app: AppHandle, state: State<'_, AppState>, id: String) -> Result<Mount
     }
 
     let _ = app.emit("state-changed", ());
+    // 挂上之后才在「发送到」里露出这一项
+    sync_sendto_menu(&app);
     Ok(state_snapshot(&app, &state, &conn))
 }
 
@@ -620,6 +631,8 @@ fn unmount(app: AppHandle, state: State<'_, AppState>, id: String) -> Result<(),
     let snapshot = state.traffic.lock().unwrap().clone();
     let _ = store::save_traffic(&app, &snapshot);
     let _ = app.emit("state-changed", ());
+    // 盘已经不在了，菜单项必须跟着消失，否则点了会复制失败
+    sync_sendto_menu(&app);
     Ok(())
 }
 
@@ -637,6 +650,7 @@ fn mount_all(app: AppHandle, state: State<'_, AppState>) -> Result<usize, String
         }
     }
     let _ = app.emit("state-changed", ());
+    sync_sendto_menu(&app);
     Ok(started)
 }
 
@@ -654,6 +668,7 @@ fn unmount_all(app: AppHandle, state: State<'_, AppState>) -> Result<usize, Stri
         count += 1;
     }
     let _ = app.emit("state-changed", ());
+    sync_sendto_menu(&app);
     Ok(count)
 }
 
@@ -717,23 +732,32 @@ fn open_target(app: AppHandle, id: String) -> Result<(), String> {
         .find(|c| c.id == id)
         .map(|c| c.target)
         .ok_or_else(|| "连接不存在".to_string())?;
+    reveal_path(&target)
+}
 
+/// 在系统文件管理器里打开任意目录（「发送到」完成之后用它直接跳到目标位置）
+#[tauri::command]
+fn open_path(path: String) -> Result<(), String> {
+    reveal_path(&path)
+}
+
+fn reveal_path(path: &str) -> Result<(), String> {
     #[cfg(windows)]
     let mut cmd = {
         let mut c = std::process::Command::new("explorer.exe");
-        c.arg(&target);
+        c.arg(path);
         c
     };
     #[cfg(target_os = "macos")]
     let mut cmd = {
         let mut c = std::process::Command::new("open");
-        c.arg(&target);
+        c.arg(path);
         c
     };
     #[cfg(all(unix, not(target_os = "macos")))]
     let mut cmd = {
         let mut c = std::process::Command::new("xdg-open");
-        c.arg(&target);
+        c.arg(path);
         c
     };
 
@@ -801,6 +825,8 @@ fn get_settings(app: AppHandle) -> Settings {
 fn save_settings(app: AppHandle, s: Settings) -> Result<Settings, String> {
     let valid = s.validate()?;
     settings::save(&app, &valid)?;
+    // 「发送到」开关可能刚被拨动：开着就补齐菜单项，关掉就整个清掉
+    sync_sendto_menu(&app);
     Ok(valid)
 }
 
@@ -997,6 +1023,106 @@ async fn test_connection(app: AppHandle, input: ConnectionInput) -> Result<DiagR
         .map_err(|e| format!("测试任务失败：{e}"))
 }
 
+// ---------------------------------------------------------------- 「发送到」菜单
+
+/// 把「当前真正挂载着」的连接同步进 SendTo 菜单。
+/// 挂载、卸载、删除连接、改设置之后都要调一次；看护线程发现进程掉了也会调。
+fn sync_sendto_menu(app: &AppHandle) {
+    let mounted: Vec<(String, String, String)> = {
+        let state = app.state::<AppState>();
+        let ids: Vec<String> = state.sessions.lock().unwrap().keys().cloned().collect();
+        store::load_connections(app)
+            .into_iter()
+            .filter(|c| ids.iter().any(|id| id == &c.id))
+            .map(|c| (c.name, c.group, c.target))
+            .collect()
+    };
+    sendto::sync(app, &mounted);
+}
+
+/// 解析命令行里的「发送到」参数。
+/// 资源管理器的规则是：把快捷方式的参数和自己拼起来，再把选中的文件路径追加在后面，
+/// 所以形态固定为 `--sendto Z: "C:\a.txt" "C:\b.txt"`。
+fn parse_sendto_args(args: &[String]) -> Option<sendto::SendRequest> {
+    let mut target: Option<String> = None;
+    let mut files: Vec<String> = Vec::new();
+    // 第一个参数是可执行文件自己
+    let mut it = args.iter().skip(1);
+    while let Some(a) = it.next() {
+        if a.as_str() == "--sendto" {
+            target = it.next().map(|s| s.trim().trim_matches('"').to_string());
+            continue;
+        }
+        if a.starts_with("--") {
+            continue;
+        }
+        files.push(a.trim_matches('"').to_string());
+    }
+    let target = target?;
+    if files.is_empty() {
+        return None;
+    }
+    Some(sendto::SendRequest { target, files })
+}
+
+/// 收到一次发送请求：存起来（等界面来取）+ 把窗口叫出来 + 发事件给已打开的界面
+fn queue_sendto(app: &AppHandle, req: sendto::SendRequest) {
+    *app.state::<AppState>().send_req.lock().unwrap() = Some(req.clone());
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.show();
+        let _ = w.unminimize();
+        let _ = w.set_focus();
+    }
+    let _ = app.emit("sendto-request", req);
+}
+
+/// 界面启动后主动来取一次：处理「本应用还没运行时就点了发送到」的情况
+#[tauri::command]
+fn sendto_take(state: State<'_, AppState>) -> Option<sendto::SendRequest> {
+    state.send_req.lock().unwrap().take()
+}
+
+#[tauri::command]
+fn sendto_dirs(path: String) -> Result<Vec<sendto::DirEntry>, String> {
+    sendto::list_dirs(&path)
+}
+
+#[tauri::command]
+fn sendto_recent(app: AppHandle, target: String) -> Vec<String> {
+    sendto::recent(&app, &target)
+}
+
+#[tauri::command]
+fn sendto_run(
+    app: AppHandle,
+    sources: Vec<String>,
+    dest: String,
+    target: String,
+    mode: String,
+) -> Result<(), String> {
+    if sources.is_empty() {
+        return Err("没有要发送的文件".into());
+    }
+    if sendto::running() {
+        return Err("已有一次传输在进行中".into());
+    }
+    sendto::run(
+        app,
+        sendto::Task {
+            sources,
+            dest,
+            target,
+            mode,
+        },
+    );
+    Ok(())
+}
+
+#[tauri::command]
+fn sendto_cancel() {
+    sendto::cancel();
+}
+
 // ---------------------------------------------------------------- 后台看护
 
 /// 启动时自动挂载 + 意外退出的自动重连，都在这条线程里做。
@@ -1013,6 +1139,8 @@ fn spawn_supervisor(app: AppHandle) {
                 let _ = start_session(&app, &state, &conn, 0);
             }
             let _ = app.emit("state-changed", ());
+            // 开机自启动挂上的盘，也要在「发送到」里就位
+            sync_sendto_menu(&app);
         }
 
         // 看护循环：进程意外退出时按退避策略重连
@@ -1069,6 +1197,8 @@ fn spawn_supervisor(app: AppHandle) {
                 }
             }
             let _ = app.emit("state-changed", ());
+            // 进程掉了（还没重连上）这一项就不该再出现在「发送到」里
+            sync_sendto_menu(&app);
         }
     });
 }
@@ -1384,6 +1514,22 @@ fn build_tray(app: &tauri::App) -> tauri::Result<()> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        // 必须是第一个注册的插件：第二次启动实例要把命令行参数转交给已在运行的那个。
+        // 「发送到」里一次选十个文件时，资源管理器可能拉起十个进程，
+        // 没有这一层就会各拷一份、互相抢同一个目标文件。
+        .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+            match parse_sendto_args(&argv) {
+                Some(req) => queue_sendto(app, req),
+                // 普通的重复启动：把收在托盘里的窗口叫出来
+                None => {
+                    if let Some(w) = app.get_webview_window("main") {
+                        let _ = w.show();
+                        let _ = w.unminimize();
+                        let _ = w.set_focus();
+                    }
+                }
+            }
+        }))
         .plugin(tauri_plugin_notification::init())
         .manage(AppState::default())
         .setup(|app| {
@@ -1394,15 +1540,26 @@ pub fn run() {
             let ledger = store::load_traffic(app.handle());
             *app.state::<AppState>().traffic.lock().unwrap() = ledger;
 
+            // 清掉上次被强杀残留的「发送到」菜单项（此时还没有任何挂载）
+            sync_sendto_menu(app.handle());
+
+            let argv: Vec<String> = std::env::args().collect();
+
             // 静默启动：仅当「通过开机自启动拉起（--silent）」且设置勾选了静默时，
             // 才不弹主界面；手动双击图标永远显示窗口。
-            let silent_arg = std::env::args().any(|a| a == "--silent");
+            let silent_arg = argv.iter().any(|a| a.as_str() == "--silent");
             let silent = silent_arg && settings::load(app.handle()).silent_start;
             if !silent {
                 if let Some(w) = app.get_webview_window("main") {
                     let _ = w.show();
                     let _ = w.set_focus();
                 }
+            }
+
+            // 本应用没在跑的时候点了「发送到」：文件和目标盘就在自己的命令行里
+            // （queue_sendto 会把窗口叫出来，不受上面的 silent 影响）
+            if let Some(req) = parse_sendto_args(&argv) {
+                queue_sendto(app.handle(), req);
             }
 
             let handle = app.handle().clone();
@@ -1451,7 +1608,13 @@ pub fn run() {
             check_target,
             notify_user,
             export_connections,
-            import_connections
+            import_connections,
+            sendto_take,
+            sendto_dirs,
+            sendto_recent,
+            sendto_run,
+            sendto_cancel,
+            open_path
         ])
         .build(tauri::generate_context!())
         .expect("Tauri 应用构建失败")

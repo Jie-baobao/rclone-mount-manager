@@ -5,6 +5,7 @@ import SettingsPanel from "./SettingsPanel";
 import SortBar, { type SortBy, type SortDir } from "./SortBar";
 import StatsPanel from "./StatsPanel";
 import LogView from "./LogView";
+import SendToDialog from "./SendToDialog";
 import {
   api,
   events,
@@ -18,6 +19,7 @@ import {
   type Connection,
   type EnvInfo,
   type MountState,
+  type SendRequest,
   type Settings,
   type Stats,
   type TrafficSummary,
@@ -51,6 +53,8 @@ export default function App() {
   const [logFilter, setLogFilter] = useState("");
   const [stats, setStats] = useState<Stats | null>(null);
   const [traffic, setTraffic] = useState<TrafficSummary | null>(null);
+  /** 资源管理器「发送到」递进来的任务；非空时弹出确认窗 */
+  const [sendReq, setSendReq] = useState<SendRequest | null>(null);
   const [toast, setToast] = useState<Toast | null>(null);
   const [busy, setBusy] = useState<string>("");
   const toastTimer = useRef<number | null>(null);
@@ -89,13 +93,20 @@ export default function App() {
     }
   }, [notify]);
 
-  // 初次加载：设置（含开机自启动开关）+ 环境 + 连接
+  // 初次加载：设置（含开机自启动开关）+ 环境 + 连接 + 可能已经攒下的「发送到」请求
   useEffect(() => {
     refreshEnv();
     Promise.all([api.getSettings(), api.getAutostart().catch(() => false)])
       .then(([s, autostart]) => setSettings({ ...s, autostart }))
       .catch(() => setSettings(null));
     refresh();
+    // 双击「发送到」时应用可能刚被拉起，事件早于界面挂载，所以主动取一次
+    api
+      .sendtoTake()
+      .then((r) => {
+        if (r) setSendReq(r);
+      })
+      .catch(() => undefined);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -122,6 +133,24 @@ export default function App() {
           ? tr("notify.bodyWithReason", { name: p.name, reason: p.reason })
           : tr("notify.body", { name: p.name });
         void api.notifyUser(title, body).catch(() => undefined);
+      })
+      .then((un) => unlisteners.push(un));
+
+    // 「发送到」：资源管理器点了菜单项（可能是第二个实例转发过来的）
+    events
+      .onSendtoRequest((req) => setSendReq(req))
+      .then((un) => unlisteners.push(un));
+
+    // 传输结束：弹窗可能已经关了，所以这里统一发一条系统通知
+    events
+      .onSendtoDone((r) => {
+        const tr = tRef.current;
+        const body = r.ok
+          ? tr("sendto.notifyOk", { n: r.copied, dest: r.dest })
+          : r.error
+          ? r.error
+          : tr("sendto.notifyFail", { ok: r.copied, failed: r.failed });
+        void api.notifyUser(tr("sendto.notifyTitle"), body).catch(() => undefined);
       })
       .then((un) => unlisteners.push(un));
 
@@ -345,6 +374,15 @@ export default function App() {
     },
     [settings]
   );
+
+  // 「发送到」窗口的标题：优先用连接名（带分组），连接已经被删掉就退回盘符
+  const sendName = useMemo(() => {
+    if (!sendReq) return "";
+    const key = sendReq.target.trim().toUpperCase();
+    const c = conns.find((x) => x.target.trim().toUpperCase() === key);
+    if (!c) return sendReq.target;
+    return c.group.trim() ? `[${c.group}] ${c.name}` : c.name;
+  }, [conns, sendReq]);
 
   return (
     <div className="app">
@@ -721,6 +759,16 @@ export default function App() {
             setSettings({ ...settings, ...s });
           }}
           onRefreshEnv={refreshEnv}
+          notify={notify}
+        />
+      )}
+
+      {sendReq && (
+        <SendToDialog
+          req={sendReq}
+          connName={sendName}
+          t={t}
+          onClose={() => setSendReq(null)}
           notify={notify}
         />
       )}

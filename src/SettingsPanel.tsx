@@ -25,6 +25,7 @@ const DEFAULTS: Settings = {
   log_retention_days: 30,
   sort_by: "default",
   sort_dir: "asc",
+  sendto_enabled: true,
 };
 
 /**
@@ -320,6 +321,24 @@ export default function SettingsPanel({
       </div>
       <p className="tips">{t("st.silentNote")}</p>
       <p className="tips">{t("st.hotkeyNote")}</p>
+
+      {/* 资源管理器集成：只有 Windows 有「发送到」菜单 */}
+      {win && (
+        <>
+          <h3 className="set-section">{t("st.sectionShell")}</h3>
+          <div className="checks">
+            <label className="check">
+              <input
+                type="checkbox"
+                checked={cfg.sendto_enabled}
+                onChange={(e) => set("sendto_enabled", e.target.checked)}
+              />
+              {t("st.sendto")}
+            </label>
+          </div>
+          <p className="tips">{t("st.sendtoNote")}</p>
+        </>
+      )}
 
       {/* 探测规则 */}
       <h3 className="set-section">{t("st.sectionProbe")}</h3>

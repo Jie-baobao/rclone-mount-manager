@@ -18,6 +18,9 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-notification = "2"
+# 「发送到」菜单：第二次启动（资源管理器传文件参数）需要转发给已运行的实例，
+# 否则一次发送几个文件就会起一堆进程各拷一份
+tauri-plugin-single-instance = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }

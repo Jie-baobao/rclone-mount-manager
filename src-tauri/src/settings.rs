@@ -29,6 +29,8 @@ pub struct Settings {
     pub sort_by: String,
     /// 排序方向：asc / desc（仅对 name / status / group 有意义）
     pub sort_dir: String,
+    /// 在资源管理器「发送到」菜单里为已挂载的连接生成快捷入口（Windows）
+    pub sendto_enabled: bool,
 }
 
 impl Default for Settings {
@@ -44,6 +46,8 @@ impl Default for Settings {
             log_retention_days: 30,
             sort_by: "default".into(),
             sort_dir: "asc".into(),
+            // 默认开启：装完就能在「发送到」里看到已挂载的盘，不需要先去设置里找开关
+            sendto_enabled: true,
         }
     }
 }
