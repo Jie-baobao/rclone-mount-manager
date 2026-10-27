@@ -4,6 +4,7 @@ import Dashboard from "./Dashboard";
 import SettingsPanel from "./SettingsPanel";
 import SortBar, { type SortBy, type SortDir } from "./SortBar";
 import StatsPanel from "./StatsPanel";
+import LogView from "./LogView";
 import {
   api,
   events,
@@ -19,6 +20,7 @@ import {
   type MountState,
   type Settings,
   type Stats,
+  type TrafficSummary,
 } from "./api";
 import { makeT, resolveLanguage, type T } from "./i18n";
 
@@ -38,10 +40,14 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [log, setLog] = useState("");
+  const [logFilter, setLogFilter] = useState("");
   const [stats, setStats] = useState<Stats | null>(null);
+  const [traffic, setTraffic] = useState<TrafficSummary | null>(null);
   const [toast, setToast] = useState<Toast | null>(null);
   const [busy, setBusy] = useState<string>("");
   const toastTimer = useRef<number | null>(null);
+  /** Ctrl+F 聚焦用的搜索框 */
+  const searchRef = useRef<HTMLInputElement | null>(null);
 
   const t: T = useMemo(() => makeT(resolveLanguage(settings?.language ?? "system")), [settings?.language]);
 
@@ -65,6 +71,8 @@ export default function App() {
       const [list, st] = await Promise.all([api.list(), api.states()]);
       setConns(list);
       setStates(Object.fromEntries(st.map((s) => [s.id, s])));
+      // 流量账本单独拉一次：它是按连接落盘的累计值，和挂载状态无关
+      api.trafficSummary().then(setTraffic).catch(() => undefined);
       // 不做默认选中：启动和刷新后都停在首页（概览），选中只由用户点击产生。
       // 选中的连接被删掉时才回落成 null。
       setSelected((cur) => (cur && list.some((c) => c.id === cur) ? cur : null));
@@ -96,6 +104,18 @@ export default function App() {
       if (action === "mount_all") void handleMountAll();
       if (action === "unmount_all") void handleUnmountAll();
     }).then((un) => unlisteners.push(un));
+
+    // 挂载失败 / 重连放弃：后端只发事件，文案在前端按当前语言拼，保证通知和界面同一语言
+    events
+      .onNotify((p) => {
+        const tr = tRef.current;
+        const title = p.kind === "gave-up" ? tr("notify.gaveUpTitle") : tr("notify.mountFailTitle");
+        const body = p.reason
+          ? tr("notify.bodyWithReason", { name: p.name, reason: p.reason })
+          : tr("notify.body", { name: p.name });
+        void api.notifyUser(title, body).catch(() => undefined);
+      })
+      .then((un) => unlisteners.push(un));
 
     const timer = window.setInterval(() => {
       api
@@ -170,6 +190,12 @@ export default function App() {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "w") {
         e.preventDefault();
         void api.hideWindow();
+      }
+      // Ctrl+F（macOS ⌘F）：直接聚焦左侧连接搜索框，不弹 WebView 自带的查找栏
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "f") {
+        e.preventDefault();
+        searchRef.current?.focus();
+        searchRef.current?.select();
       }
     }
     window.addEventListener("keydown", onKey);
@@ -327,10 +353,19 @@ export default function App() {
         </button>
 
         <input
+          ref={searchRef}
           className="ctl search"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
+          onKeyDown={(e) => {
+            // Esc 清空并退出搜索，免得占着 Ctrl+F 进来的框还得手动点空白
+            if (e.key === "Escape") {
+              setQuery("");
+              e.currentTarget.blur();
+            }
+          }}
           placeholder={t("app.searchPh")}
+          title={t("app.searchTip")}
         />
 
         <SortBar sortBy={sortBy} sortDir={sortDir} onChange={changeSort} t={t} />
@@ -435,7 +470,7 @@ export default function App() {
           if (e.target === e.currentTarget) setSelected(null);
         }}
       >
-        {!current && <Dashboard conns={conns} states={states} t={t} onSelect={setSelected} />}
+        {!current && <Dashboard conns={conns} states={states} traffic={traffic} t={t} onSelect={setSelected} />}
 
         {current && (
           <>
@@ -598,7 +633,7 @@ export default function App() {
                   </button>
                 </div>
               </div>
-              <pre className="log">{log || t("app.logEmpty")}</pre>
+              <LogView text={log || t("app.logEmpty")} filter={logFilter} onFilter={setLogFilter} t={t} />
             </section>
           </>
         )}
@@ -641,6 +676,8 @@ export default function App() {
         <SettingsPanel
           initial={settings}
           env={env}
+          conns={conns}
+          states={states}
           t={t}
           onClose={() => setSettingsOpen(false)}
           onSaved={(s) => {

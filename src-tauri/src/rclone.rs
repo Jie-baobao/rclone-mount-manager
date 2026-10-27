@@ -424,6 +424,12 @@ pub fn build_mount_args(
     args.push("--retries".into());
     args.push("3".into());
 
+    // 自定义参数放最后：rclone 对同名 flag 取「后出现的那个」，
+    // 所以用户能覆盖上面的默认值（比如把 --dir-cache-time 调大）。
+    for extra in parse_extra_args(&conn.extra_args)? {
+        args.push(extra);
+    }
+
     #[cfg(windows)]
     {
         // 盘符必须形如 Z:
@@ -442,6 +448,121 @@ pub fn build_mount_args(
     }
 
     Ok(args)
+}
+
+/// 把用户填的自定义参数切成 argv。
+///
+/// 规则很朴素：空白分隔，单/双引号内不切（用于带空格的取值，例如
+/// `--header "X-Token: a b"`），引号没闭合直接报错。
+fn split_args(raw: &str) -> Result<Vec<String>, String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut cur = String::new();
+    let mut quote: Option<char> = None;
+    let mut has = false;
+    for ch in raw.chars() {
+        match quote {
+            Some(q) => {
+                if ch == q {
+                    quote = None;
+                } else {
+                    cur.push(ch);
+                }
+                has = true;
+            }
+            None => match ch {
+                '"' | '\'' => {
+                    quote = Some(ch);
+                    has = true;
+                }
+                c if c.is_whitespace() => {
+                    if has {
+                        out.push(std::mem::take(&mut cur));
+                        has = false;
+                    }
+                }
+                c => {
+                    cur.push(c);
+                    has = true;
+                }
+            },
+        }
+    }
+    if quote.is_some() {
+        return Err("自定义 rclone 参数里的引号没有闭合".into());
+    }
+    if has {
+        out.push(cur);
+    }
+    Ok(out)
+}
+
+/// 这几个参数由管理器自己控制（配置文件位置、rc 端口、进程形态、日志文件），
+/// 混进自定义参数里会让应用失去对挂载进程的管理，直接拒绝。
+const RESERVED_ARGS: [&str; 8] = [
+    "--config",
+    "--rc",
+    "--rc-addr",
+    "--rc-no-auth",
+    "--daemon",
+    "--log-file",
+    "--volname",
+    "--help",
+];
+
+/// 解析并校验每连接的自定义 rclone 参数。
+/// 允许 `--flag value` 与 `--flag=value` 两种写法，禁止裸词（会被 rclone 当成位置参数）。
+pub fn parse_extra_args(raw: &str) -> Result<Vec<String>, String> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return Ok(Vec::new());
+    }
+    let tokens = split_args(raw)?;
+    let mut out: Vec<String> = Vec::new();
+    let mut expect_value = false;
+    for t in tokens {
+        let is_flag = t.starts_with('-');
+        if !is_flag && !expect_value {
+            return Err(format!(
+                "「{t}」不是合法参数：参数要以 -- 开头，或紧跟在参数名后面作为取值"
+            ));
+        }
+        if is_flag {
+            let name = t.split('=').next().unwrap_or("").to_ascii_lowercase();
+            if RESERVED_ARGS.contains(&name.as_str()) {
+                return Err(format!("{t} 由管理器控制，不能写进自定义参数"));
+            }
+            expect_value = !t.contains('=') && t.len() > 2;
+        } else {
+            expect_value = false;
+        }
+        out.push(t);
+    }
+    Ok(out)
+}
+
+/// 目标位置（盘符/挂载点）是否已经被系统占用。
+/// Windows 上用「这个盘符的根目录存不存在」判断；类 Unix 上「目录存在且非空」算占用。
+pub fn target_taken(target: &str) -> bool {
+    let t = target.trim();
+    if t.is_empty() {
+        return false;
+    }
+    #[cfg(windows)]
+    {
+        let root = if t.ends_with('\\') {
+            t.to_string()
+        } else {
+            format!("{t}\\")
+        };
+        std::path::Path::new(&root).exists()
+    }
+    #[cfg(not(windows))]
+    {
+        match std::fs::read_dir(t) {
+            Ok(mut it) => it.next().is_some(),
+            Err(_) => false,
+        }
+    }
 }
 
 /// 卷标：有分组时显示成 `[工作] NAS`，资源管理器按名称排序时同组磁盘自然相邻。

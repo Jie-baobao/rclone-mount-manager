@@ -281,8 +281,8 @@ body {
 }
 
 .dot {
-  width: 9px;
-  height: 9px;
+  width: 10px;
+  height: 10px;
   border-radius: 50%;
   background: var(--border);
   flex: none;
@@ -295,21 +295,25 @@ body {
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 18%, transparent);
 }
 
-/* 黄：已连上但延迟高 / 波动 / 首两次超时 */
+/* 黄：已连上但延迟高 / 波动 / 首两次超时。
+   形状也用三角形，色弱用户不看颜色也能分辨四种状态（圆/三角/方/空心） */
 .dot.warn {
   background: #e0a008;
-  box-shadow: 0 0 0 3px rgba(224, 160, 8, 0.2);
+  border-radius: 0;
+  clip-path: polygon(50% 0, 100% 100%, 0 100%);
 }
 
-/* 红：连接异常、进程退出、认证失败 */
+/* 红：连接异常、进程退出、认证失败 → 方形 */
 .dot.bad {
   background: var(--danger);
+  border-radius: 2px;
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger) 20%, transparent);
 }
 
-/* 灰：已停止 */
+/* 灰：已停止 → 空心圆（不靠颜色深浅区分） */
 .dot.off {
-  background: color-mix(in srgb, var(--muted) 55%, transparent);
+  background: transparent;
+  border: 1.5px solid color-mix(in srgb, var(--muted) 70%, transparent);
 }
 
 .conn-list .empty {
@@ -1418,4 +1422,128 @@ input::-webkit-credentials-auto-fill-button {
   .home-cards {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+}
+
+/* ------------------------- 流量条（首页合计 / 详情页单连接） */
+.traffic-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 26px;
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg);
+  font-variant-numeric: tabular-nums;
+}
+
+.traffic-group {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  min-width: 0;
+}
+
+.traffic-group > label {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.traffic-group > span {
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.traffic-group .up {
+  color: var(--accent);
+}
+
+.traffic-group .down {
+  color: var(--ok);
+}
+
+.traffic-group i {
+  font-style: normal;
+  margin-right: 3px;
+  font-weight: 700;
+}
+
+/* ------------------------- 日志面板：过滤框 + 级别着色 */
+.log-tools {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0 6px;
+}
+
+.log-tools .log-filter {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 28px;
+  font-size: 12px;
+}
+
+.log-tools .muted {
+  flex: none;
+}
+
+.log-line {
+  display: inline;
+}
+
+/* rclone 日志级别：错误红、提示黄、调试灰，正常行保持原色 */
+.log-line.err {
+  color: var(--danger);
+}
+
+.log-line.warn {
+  color: #e0a008;
+}
+
+.log-line.dim {
+  color: var(--muted);
+  opacity: 0.8;
+}
+
+/* ------------------------- 导出/导入口令提示 */
+.pass-box {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px dashed var(--border);
+  border-radius: 10px;
+  background: var(--bg);
+}
+
+.pass-box .tips {
+  margin: 0 0 8px;
+}
+
+.pass-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.pass-row .ctl {
+  flex: 1 1 220px;
+  min-width: 140px;
+}
+
+/* ------------------------- 带说明的字段：标签后面一个小问号 */
+.hint-dot {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 13px;
+  height: 13px;
+  margin-left: 5px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--muted) 22%, transparent);
+  color: var(--muted);
+  font-style: normal;
+  font-size: 9px;
+  line-height: 1;
+  cursor: help;
 }

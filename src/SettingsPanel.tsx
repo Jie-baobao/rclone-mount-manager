@@ -2,11 +2,15 @@ import { useState } from "react";
 import Modal from "./Modal";
 import {
   api,
+  fmtLatency,
   isWindows,
+  type Connection,
   type EnvInfo,
+  type MountState,
   type Settings,
   type UpdateReport,
 } from "./api";
+import { copyText } from "./clipboard";
 import { LANGUAGE_OPTIONS, makeT, resolveLanguage } from "./i18n";
 import type { T } from "./i18n";
 
@@ -30,6 +34,8 @@ const DEFAULTS: Settings = {
 export default function SettingsPanel({
   initial,
   env,
+  conns,
+  states,
   t,
   onClose,
   onSaved,
@@ -38,6 +44,9 @@ export default function SettingsPanel({
 }: {
   initial: Settings;
   env: EnvInfo | null;
+  /** 诊断报告要列出每条连接的状态，所以把列表和挂载状态一起传进来 */
+  conns: Connection[];
+  states: Record<string, MountState>;
   t: T;
   onClose: () => void;
   onSaved: (s: Settings) => void;
@@ -51,6 +60,13 @@ export default function SettingsPanel({
   const [working, setWorking] = useState("");
   const [exporting, setExporting] = useState(false);
   const [importing, setImporting] = useState(false);
+  /** 导出：先问一句要不要加密（密码是可选口令，留空即明文） */
+  const [expOpen, setExpOpen] = useState(false);
+  const [expPass, setExpPass] = useState("");
+  /** 导入：加密文件先挂起，等用户给口令 */
+  const [impPending, setImpPending] = useState<string | null>(null);
+  const [impPass, setImpPass] = useState("");
+  const [diagCopied, setDiagCopied] = useState(false);
 
   const win = isWindows(env);
   const set = <K extends keyof Settings>(key: K, value: Settings[K]) =>
@@ -110,19 +126,20 @@ export default function SettingsPanel({
     }
   }
 
-  async function doExport() {
+  async function doExport(password?: string) {
     setExporting(true);
     try {
-      const json = await api.exportConnections();
-      const n = (JSON.parse(json)?.connections ?? []).length;
+      const json = await api.exportConnections(password);
       const blob = new Blob([json], { type: "application/json" });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `rclone-mount-manager-connections.json`;
+      a.download = `rclone-mount-manager-connections${password ? "-encrypted" : ""}.json`;
       a.click();
       URL.revokeObjectURL(url);
-      notify("ok", t("st.exported", { n }));
+      notify("ok", password ? t("st.exportedEnc") : t("st.exported", { n: conns.length }));
+      setExpOpen(false);
+      setExpPass("");
     } catch (e) {
       notify("bad", String(e));
     } finally {
@@ -130,17 +147,70 @@ export default function SettingsPanel({
     }
   }
 
-  async function doImport(file: File) {
+  async function runImport(text: string, password?: string) {
     setImporting(true);
     try {
-      const text = await file.text();
-      const n = await api.importConnections(text);
-      notify("ok", t("st.imported", { n }));
+      const n = await api.importConnections(text, password);
+      // 明确告诉用户这次是「解密后导入」还是「明文导入」，避免以为文件已受保护
+      notify("ok", password ? t("st.importedEncOk", { n }) : t("st.importedPlain", { n }));
+      setImpPending(null);
+      setImpPass("");
     } catch (e) {
       notify("bad", t("st.importFail", { e: String(e) }));
     } finally {
       setImporting(false);
     }
+  }
+
+  async function doImport(file: File) {
+    const text = await file.text();
+    // 先在前端看一眼是不是加密信封：是的话先要口令，别把「缺口令」当失败弹给用户
+    let encrypted = false;
+    try {
+      encrypted = JSON.parse(text)?.encrypted === true;
+    } catch {
+      /* 不是 JSON 就交给后端报错，文案更准确 */
+    }
+    if (encrypted) {
+      setImpPending(text);
+      setImpPass("");
+      return;
+    }
+    await runImport(text);
+  }
+
+  /** 诊断报告：把排查问题需要的信息一次复制出来，方便发群/发 issue */
+  function diagText(): string {
+    const mountedCount = conns.filter((c) => states[c.id]?.mounted).length;
+    const rows = conns.map((c) => {
+      const st = states[c.id];
+      const err = (st?.last_error ?? "").split("\n").filter((l) => l.trim()).slice(-1)[0] ?? "";
+      const state = st?.mounted ? `${st.health}${st.latency_us != null ? ` ${fmtLatency(st.latency_us)}` : ""}` : "stopped";
+      return `- ${c.name} | ${c.protocol.toUpperCase()} | ${c.target} | ${c.host}:${c.port} | ${state}${
+        err ? ` | ${err.slice(0, 120)}` : ""
+      }`;
+    });
+    return [
+      `Rclone Mount Manager — ${t("st.diagTitle")}`,
+      `Time: ${new Date().toLocaleString()}`,
+      `Manager: v${env?.app_version ?? "?"}`,
+      `Platform: ${env?.platform ?? "?"}`,
+      `rclone: ${env?.rclone_version || "-"} (${env?.rclone_source || "-"}) ${env?.rclone_path || ""}`,
+      `FUSE: ${env?.fuse_ready ? env?.fuse_version || "ready" : "missing"}`,
+      `Settings: lang=${cfg.language} probe=${cfg.probe_interval_secs}s threshold=${cfg.latency_threshold_ms}ms warn=${cfg.warn_fails} error=${cfg.error_fails} log=${cfg.log_max_mb}MB/${cfg.log_retention_days}d sort=${cfg.sort_by}/${cfg.sort_dir}`,
+      `Connections: ${conns.length} (mounted ${mountedCount})`,
+      ...rows,
+    ].join("\n");
+  }
+
+  async function copyDiag() {
+    const ok = await copyText(diagText());
+    if (!ok) {
+      notify("bad", t("st.diagFail"));
+      return;
+    }
+    setDiagCopied(true);
+    window.setTimeout(() => setDiagCopied(false), 1800);
   }
 
   const srcLabel: Record<string, string> = {
@@ -161,9 +231,12 @@ export default function SettingsPanel({
   ] as const;
   type NumKey = (typeof NUM_KEYS)[number];
 
-  const num = (key: NumKey, label: string, min: number, max: number) => (
-    <label className="field">
-      <span>{label}</span>
+  const num = (key: NumKey, label: string, min: number, max: number, hint?: string) => (
+    <label className="field" title={hint}>
+      <span>
+        {label}
+        {hint ? <i className="hint-dot" aria-hidden="true">?</i> : null}
+      </span>
       <input
         className="ctl"
         type="number"
@@ -251,10 +324,10 @@ export default function SettingsPanel({
       {/* 探测规则 */}
       <h3 className="set-section">{t("st.sectionProbe")}</h3>
       <div className="form-grid">
-        {num("probe_interval_secs", t("st.probeInterval"), 5, 3600)}
-        {num("latency_threshold_ms", t("st.latencyThreshold"), 100, 60000)}
-        {num("warn_fails", t("st.warnFails"), 1, 99)}
-        {num("error_fails", t("st.errorFails"), 1, 99)}
+        {num("probe_interval_secs", t("st.probeInterval"), 5, 3600, t("st.hintInterval"))}
+        {num("latency_threshold_ms", t("st.latencyThreshold"), 100, 60000, t("st.hintThreshold"))}
+        {num("warn_fails", t("st.warnFails"), 1, 99, t("st.hintWarn"))}
+        {num("error_fails", t("st.errorFails"), 1, 99, t("st.hintError"))}
       </div>
       <p className="tips">{t("st.latencyNote")}</p>
       <p className="tips">{t("st.probeNote")}</p>
@@ -267,8 +340,8 @@ export default function SettingsPanel({
       {/* 日志 */}
       <h3 className="set-section">{t("st.sectionLog")}</h3>
       <div className="form-grid">
-        {num("log_max_mb", t("st.logMax"), 1, 500)}
-        {num("log_retention_days", t("st.logRetention"), 1, 3650)}
+        {num("log_max_mb", t("st.logMax"), 1, 500, t("st.hintLogSize"))}
+        {num("log_retention_days", t("st.logRetention"), 1, 3650, t("st.hintLogDays"))}
       </div>
       <p className="tips">{t("st.logNote")}</p>
 
@@ -355,7 +428,7 @@ export default function SettingsPanel({
       {/* 数据 */}
       <h3 className="set-section">{t("st.sectionData")}</h3>
       <div className="data-actions">
-        <button className="btn" onClick={doExport} disabled={exporting}>
+        <button className="btn" onClick={() => setExpOpen((v) => !v)} disabled={exporting}>
           {exporting ? "…" : t("st.export")}
         </button>
         <label className={`btn ${importing ? "disabled" : ""}`}>
@@ -371,9 +444,79 @@ export default function SettingsPanel({
             }}
           />
         </label>
+        <button className="btn ghost" onClick={() => void copyDiag()}>
+          {diagCopied ? t("st.diagCopied") : t("st.diagCopy")}
+        </button>
       </div>
+
+      {/* 导出：明说这份文件里带着可还原的口令，让用户自己决定要不要加密 */}
+      {expOpen && (
+        <div className="pass-box">
+          <p className="tips">{t("st.exportWarn")}</p>
+          <div className="pass-row">
+            <input
+              className="ctl"
+              type="password"
+              value={expPass}
+              onChange={(e) => setExpPass(e.target.value)}
+              placeholder={t("st.passPh")}
+              autoComplete="new-password"
+            />
+            <button className="btn primary small" disabled={!expPass || exporting} onClick={() => void doExport(expPass)}>
+              {t("st.expEncrypted")}
+            </button>
+            <button className="btn small" disabled={exporting} onClick={() => void doExport(undefined)}>
+              {t("st.expPlain")}
+            </button>
+            <button
+              className="btn ghost small"
+              onClick={() => {
+                setExpOpen(false);
+                setExpPass("");
+              }}
+            >
+              {t("cf.cancel")}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* 导入：加密文件先要口令，避免把「缺口令」当成导入失败 */}
+      {impPending && (
+        <div className="pass-box">
+          <p className="tips">{t("st.importEncNote")}</p>
+          <div className="pass-row">
+            <input
+              className="ctl"
+              type="password"
+              value={impPass}
+              onChange={(e) => setImpPass(e.target.value)}
+              placeholder={t("st.passPh")}
+              autoComplete="off"
+            />
+            <button
+              className="btn primary small"
+              disabled={!impPass || importing}
+              onClick={() => void runImport(impPending, impPass)}
+            >
+              {t("st.impGo")}
+            </button>
+            <button
+              className="btn ghost small"
+              onClick={() => {
+                setImpPending(null);
+                setImpPass("");
+              }}
+            >
+              {t("cf.cancel")}
+            </button>
+          </div>
+        </div>
+      )}
+
       <p className="tips">{t("st.exportNote")}</p>
       <p className="tips">{t("st.importNote")}</p>
+      <p className="tips">{t("st.diagNote")}</p>
     </Modal>
   );
 }

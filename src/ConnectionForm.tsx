@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Modal from "./Modal";
 import {
   api,
@@ -50,6 +50,9 @@ export default function ConnectionForm({ initial, env, t, onClose, onSaved }: Pr
   const [group, setGroup] = useState(initial?.group ?? "");
   const [sysProxy, setSysProxy] = useState(initial?.use_system_proxy ?? false);
   const [probeMode, setProbeMode] = useState<ProbeMode>(initial?.probe_mode ?? "light");
+  const [extraArgs, setExtraArgs] = useState(initial?.extra_args ?? "");
+  /** 盘符预检结果（空串 = 没问题） */
+  const [targetWarn, setTargetWarn] = useState("");
 
   const [s3Provider, setS3Provider] = useState(initial?.s3_provider ?? "Other");
   const [region, setRegion] = useState(initial?.region ?? "");
@@ -93,6 +96,7 @@ export default function ConnectionForm({ initial, env, t, onClose, onSaved }: Pr
       group,
       use_system_proxy: sysProxy,
       probe_mode: probeMode,
+      extra_args: extraArgs,
     }),
     [
       initial?.id,
@@ -120,8 +124,33 @@ export default function ConnectionForm({ initial, env, t, onClose, onSaved }: Pr
       group,
       sysProxy,
       probeMode,
+      extraArgs,
     ]
   );
+
+  // 盘符/挂载点预检：输入停下来 350ms 再问后端，避免每敲一个字都查一次盘符表
+  useEffect(() => {
+    let alive = true;
+    const timer = window.setTimeout(() => {
+      api
+        .checkTarget(target, initial?.id ?? "")
+        .then((r) => {
+          if (!alive) return;
+          if (r.available) {
+            setTargetWarn("");
+          } else if (r.reason === "other-connection") {
+            setTargetWarn(t("cf.targetByConn", { name: r.owner }));
+          } else {
+            setTargetWarn(t("cf.targetBusy"));
+          }
+        })
+        .catch(() => alive && setTargetWarn(""));
+    }, 350);
+    return () => {
+      alive = false;
+      window.clearTimeout(timer);
+    };
+  }, [target, initial?.id, t]);
 
   function changeProtocol(p: Protocol) {
     setProtocol(p);
@@ -181,7 +210,7 @@ export default function ConnectionForm({ initial, env, t, onClose, onSaved }: Pr
           <button className="btn" onClick={doTest} disabled={testing || !host}>
             {testing ? t("cf.testing") : t("cf.test")}
           </button>
-          <button className="btn primary" onClick={doSave} disabled={saving || !name || !host}>
+          <button className="btn primary" onClick={doSave} disabled={saving || !name || !host || !!targetWarn}>
             {saving ? t("cf.saving") : t("cf.save")}
           </button>
         </>
@@ -297,6 +326,8 @@ export default function ConnectionForm({ initial, env, t, onClose, onSaved }: Pr
 
       {isS3 && <p className="tips">{t("cf.s3Tip")}</p>}
 
+      {targetWarn && <p className="tips bad-text">⚠ {targetWarn}</p>}
+
       {protocol === "webdav" && <p className="tips">{t("cf.davTip")}</p>}
 
       <div className="checks">
@@ -362,8 +393,19 @@ export default function ConnectionForm({ initial, env, t, onClose, onSaved }: Pr
             <input type="checkbox" checked={readOnly} onChange={(e) => setReadOnly(e.target.checked)} />
             {t("cf.readOnly")}
           </label>
+          <label className="field span2">
+            <span>{t("cf.extraArgs")}</span>
+            <input
+              className="ctl mono"
+              value={extraArgs}
+              onChange={(e) => setExtraArgs(e.target.value)}
+              placeholder={t("cf.extraArgsPh")}
+            />
+            <small className="muted">{t("cf.extraArgsHint")}</small>
+          </label>
         </div>
         <p className="tips">{t("cf.probeModeTip")}</p>
+        <p className="tips">{t("cf.extraArgsTip")}</p>
       </details>
 
       {result && (

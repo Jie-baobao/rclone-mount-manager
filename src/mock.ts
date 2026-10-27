@@ -41,6 +41,7 @@ const conns: Connection[] = [
     group: "家庭",
     use_system_proxy: false,
     probe_mode: "light",
+    extra_args: "",
     created_at: now,
   },
   {
@@ -68,6 +69,7 @@ const conns: Connection[] = [
     group: "办公",
     use_system_proxy: true,
     probe_mode: "light",
+    extra_args: "",
     created_at: now - 100,
   },
   {
@@ -95,6 +97,7 @@ const conns: Connection[] = [
     group: "",
     use_system_proxy: false,
     probe_mode: "light",
+    extra_args: "",
     created_at: now - 200,
   },
 ];
@@ -205,7 +208,31 @@ function reply(cmd: string, args?: Record<string, unknown>): unknown {
           360, 420, 380, 0, 310, 460, 390, 1800, 340, 410, 350, 300, 390, 370, 0, 440, 360, 400, 380,
           350, 330, 410, 390, 380,
         ],
+        up_bytes: 118_111_232,
+        down_bytes: 615_891_968,
+        today_up: 268_435_456,
+        today_down: 1_342_177_280,
+        total_up: 8_589_934_592,
+        total_down: 42_949_672_960,
       } satisfies Stats;
+    case "traffic_summary":
+      return {
+        today_up: 402_653_184,
+        today_down: 2_254_857_830,
+        total_up: 12_884_901_888,
+        total_down: 68_719_476_736,
+      };
+    case "check_target": {
+      // 预览环境里也做一次真实冲突检查：换了别的连接占用的盘符就能看到提示
+      const t = String(args?.target ?? "").trim().toUpperCase();
+      const exclude = String(args?.excludeId ?? "");
+      const other = list.find((c) => c.id !== exclude && c.target.toUpperCase() === t);
+      return other
+        ? { available: false, reason: "other-connection", owner: other.name }
+        : { available: true, reason: "", owner: "" };
+    }
+    case "notify_user":
+      return null;
     case "get_autostart":
       return true;
     case "get_settings":
@@ -224,7 +251,10 @@ function reply(cmd: string, args?: Record<string, unknown>): unknown {
     case "save_settings":
       return args?.s;
     case "export_connections":
-      return JSON.stringify({ app: "rclone-mount-manager", format: 1, connections: list.map((c) => ({ ...c, password_obscured: "" })) });
+      // 浏览器预览下带口令就返回一个假的加密信封，方便看导入弹口令的交互
+      return args?.password
+        ? JSON.stringify({ app: "rclone-mount-manager", format: 2, encrypted: true, kdf: "pbkdf2-sha256", iterations: 120000, salt: "", nonce: "", ciphertext: "" })
+        : JSON.stringify({ app: "rclone-mount-manager", format: 1, connections: list.map((c) => ({ ...c, password_obscured: "" })) });
     case "import_connections":
       return 2;
     case "check_updates":

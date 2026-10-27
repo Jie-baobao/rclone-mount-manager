@@ -1,28 +1,18 @@
 import { useState } from "react";
 import {
   api,
+  fmtBytes,
   fmtLatency,
   probeKindLabel,
   type ProbeMode,
   type Stats,
   type MountState,
 } from "./api";
+import TrafficBar from "./TrafficBar";
 import type { T } from "./i18n";
 
 /** 图里只画最近这么多次探测：数据量固定，节点跑一整天也不会拖慢界面 */
 const WINDOW = 20;
-
-function fmtBytes(n: number): string {
-  if (!n) return "0";
-  const units = ["B", "KB", "MB", "GB", "TB"];
-  let v = n;
-  let i = 0;
-  while (v >= 1024 && i < units.length - 1) {
-    v /= 1024;
-    i += 1;
-  }
-  return `${v.toFixed(v >= 100 || i === 0 ? 0 : 1)} ${units[i]}`;
-}
 
 function fmtSpeed(bps: number): string {
   if (!bps) return "0 B/s";
@@ -316,6 +306,15 @@ export default function StatsPanel({
           </small>
         </div>
       </div>
+
+      {/* 单条连接的上传/下载合计（今日 + 累计），数据来自后端落盘账本 */}
+      <TrafficBar
+        todayUp={s?.today_up ?? 0}
+        todayDown={s?.today_down ?? 0}
+        totalUp={s?.total_up ?? 0}
+        totalDown={s?.total_down ?? 0}
+        t={t}
+      />
 
       <div className="spark-wrap">
         <div className="spark-head">

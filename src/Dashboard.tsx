@@ -1,4 +1,5 @@
-import { fmtLatency, healthOf, healthTip, PROTOCOL_META, type Connection, type MountState } from "./api";
+import { fmtLatency, healthOf, healthTip, PROTOCOL_META, type Connection, type MountState, type TrafficSummary } from "./api";
+import TrafficBar from "./TrafficBar";
 import type { T } from "./i18n";
 
 /**
@@ -10,11 +11,14 @@ import type { T } from "./i18n";
 export default function Dashboard({
   conns,
   states,
+  traffic,
   t,
   onSelect,
 }: {
   conns: Connection[];
   states: Record<string, MountState>;
+  /** 全部连接的上传/下载合计（今日 + 累计） */
+  traffic: TrafficSummary | null;
   t: T;
   onSelect: (id: string) => void;
 }) {
@@ -59,6 +63,22 @@ export default function Dashboard({
               </div>
             ))}
           </div>
+
+          <section className="panel">
+            <div className="panel-head">
+              <h3>{t("traffic.title")}</h3>
+              <div className="panel-tools">
+                <span className="muted small">{t("traffic.allConns")}</span>
+              </div>
+            </div>
+            <TrafficBar
+              todayUp={traffic?.today_up ?? 0}
+              todayDown={traffic?.today_down ?? 0}
+              totalUp={traffic?.total_up ?? 0}
+              totalDown={traffic?.total_down ?? 0}
+              t={t}
+            />
+          </section>
 
           <section className="panel">
             <div className="panel-head">

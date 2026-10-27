@@ -41,6 +41,8 @@ export interface Connection {
   use_system_proxy: boolean;
   /** 探测方式：full / light（默认，不碰盘）/ process */
   probe_mode: ProbeMode;
+  /** 追加给 rclone mount 的自定义参数（命令行原文，例如 `--transfers 4`） */
+  extra_args: string;
   created_at: number;
 }
 
@@ -72,6 +74,7 @@ export interface ConnectionInput {
   group: string;
   use_system_proxy: boolean;
   probe_mode: ProbeMode;
+  extra_args: string;
 }
 
 export interface MountState {
@@ -111,6 +114,23 @@ export function fmtLatency(us: number | null | undefined): string {
 }
 
 /**
+ * 把字节数格式化成好读的文本：512 B / 1.2 MB / 3.4 GB。
+ * 统计卡、流量条、日志都用同一套口径，免得同一张界面上出现两种换行规则。
+ */
+export function fmtBytes(n: number): string {
+  if (!n || n <= 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB", "TB", "PB"];
+  let v = n;
+  let i = 0;
+  while (v >= 1024 && i < units.length - 1) {
+    v /= 1024;
+    i += 1;
+  }
+  const digits = i === 0 ? 0 : v >= 100 ? 0 : 1;
+  return `${v.toFixed(digits)} ${units[i]}`;
+}
+
+/**
  * 本次挂载的统计数据（后端每 5 秒从 rclone 的本机 rc 端口采一次，只在内存里）。
  *
  * 口径提醒：rclone 的 core/stats 只有「收 + 发」合计的字节数，不区分上下行；
@@ -129,6 +149,31 @@ export interface Stats {
   latency_us: number | null;
   /** 最近 40 次探测延迟（微秒），0 表示这次失败 */
   history: number[];
+  /** 本次挂载的上下行字节（方向按「是否有活跃上传」推断，属近似口径） */
+  up_bytes: number;
+  down_bytes: number;
+  /** 今天 / 累计的上下行（落盘账本，重启后仍在） */
+  today_up: number;
+  today_down: number;
+  total_up: number;
+  total_down: number;
+}
+
+/** 首页概览用的全部连接流量合计 */
+export interface TrafficSummary {
+  today_up: number;
+  today_down: number;
+  total_up: number;
+  total_down: number;
+}
+
+/** 盘符/挂载点占用检查结果 */
+export interface TargetCheck {
+  available: boolean;
+  /** "" / "other-connection" / "occupied" */
+  reason: string;
+  /** 占用它的连接名 */
+  owner: string;
 }
 
 export interface DiagResult {
@@ -194,6 +239,11 @@ export const api = {
   states: () => call<MountState[]>("mount_states"),
   readLog: (id: string) => call<string>("read_log", { id }),
   getStats: (id: string) => call<Stats>("get_stats", { id }),
+  /** 全部连接的今日/累计上传下载合计（首页概览） */
+  trafficSummary: () => call<TrafficSummary>("traffic_summary"),
+  /** 盘符/挂载点预检：别的连接或系统占用了就返回 available=false */
+  checkTarget: (target: string, excludeId: string) =>
+    call<TargetCheck>("check_target", { target, excludeId }),
   /** 把本次挂载的流量计数清零（峰值、累计、次数），便于单独量一次拷贝 */
   resetStats: (id: string) => call<void>("reset_stats", { id }),
   /** 手动做一次完整探测（真实列目录），返回微秒；会让 NAS 读一次目录 */
@@ -207,12 +257,16 @@ export const api = {
   installRclone: (version: string) => call<string>("install_rclone", { version }),
   installWinfsp: () => call<string>("install_winfsp"),
   openUrl: (url: string) => call<void>("open_url", { url }),
+  /** 弹系统通知（标题/正文由前端按当前语言拼好） */
+  notifyUser: (title: string, body: string) => call<void>("notify_user", { title, body }),
   /** Ctrl+W：关闭主窗口到后台（托盘可用时隐藏，否则最小化），挂载进程不受影响 */
   hideWindow: () => call<void>("hide_main_window"),
   getSettings: () => call<Settings>("get_settings"),
   saveSettings: (s: Settings) => call<Settings>("save_settings", { s }),
-  exportConnections: () => call<string>("export_connections"),
-  importConnections: (data: string) => call<number>("import_connections", { data }),
+  exportConnections: (password?: string) =>
+    call<string>("export_connections", { password: password ?? null }),
+  importConnections: (data: string, password?: string) =>
+    call<number>("import_connections", { data, password: password ?? null }),
 };
 
 /** 后端主动推送的事件 */
@@ -223,7 +277,19 @@ export const events = {
     isMock() ? mockListen() : listen("connections-changed", () => cb()),
   onTrayAction: (cb: (action: string) => void): Promise<UnlistenFn> =>
     isMock() ? mockListen() : listen<string>("tray-action", (e) => cb(e.payload)),
+  /** 后端要求弹系统通知（挂载失败 / 重连放弃），文案由前端本地化 */
+  onNotify: (cb: (payload: NotifyPayload) => void): Promise<UnlistenFn> =>
+    isMock() ? mockListen() : listen<NotifyPayload>("notify", (e) => cb(e.payload)),
 };
+
+/** 后端推送的通知请求 */
+export interface NotifyPayload {
+  /** mount-failed（手动挂载失败）/ gave-up（自动重连放弃） */
+  kind: "mount-failed" | "gave-up";
+  id: string;
+  name: string;
+  reason: string;
+}
 
 /** 协议元信息：label/short 各语言通用；hint/pathLabel/pathPlaceholder 走 i18n（pm.<code>.*） */
 export const PROTOCOL_META: Record<Protocol, { label: string; short: string; port: number }> = {

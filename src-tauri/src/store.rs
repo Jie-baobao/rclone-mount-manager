@@ -1,4 +1,5 @@
-use crate::model::Connection;
+use crate::model::{Connection, TrafficDay};
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Manager};
@@ -64,4 +65,26 @@ pub fn write_atomic(path: &Path, text: &str) -> Result<(), String> {
 /// 生成本应用的日志文件路径（每个连接一份）
 pub fn mount_log_path(app: &AppHandle, id: &str) -> Result<PathBuf, String> {
     Ok(log_dir(app)?.join(format!("mount-{id}.log")))
+}
+
+pub fn traffic_path(app: &AppHandle) -> Result<PathBuf, String> {
+    Ok(config_dir(app)?.join("traffic.json"))
+}
+
+/// 读取上传/下载账本（按连接 id 索引）。文件不存在或损坏时返回空表：
+/// 流量只是参考数据，不值得因为它报错拦住启动。
+pub fn load_traffic(app: &AppHandle) -> HashMap<String, TrafficDay> {
+    let Ok(path) = traffic_path(app) else {
+        return HashMap::new();
+    };
+    match fs::read_to_string(&path) {
+        Ok(text) => serde_json::from_str(&text).unwrap_or_default(),
+        Err(_) => HashMap::new(),
+    }
+}
+
+pub fn save_traffic(app: &AppHandle, map: &HashMap<String, TrafficDay>) -> Result<(), String> {
+    let path = traffic_path(app)?;
+    let text = serde_json::to_string_pretty(map).map_err(|e| format!("序列化流量账本失败：{e}"))?;
+    write_atomic(&path, &text)
 }

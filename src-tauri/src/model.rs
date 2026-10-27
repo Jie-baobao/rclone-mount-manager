@@ -106,6 +106,9 @@ pub struct Connection {
     /// 探测方式：full=完整（真实列目录）/ light=轻量（TCP 连端口）/ process=仅看挂载进程
     /// 默认 light：不读文件系统，不会唤醒休眠中的硬盘
     pub probe_mode: String,
+    /// 追加给 rclone mount 的自定义参数（例如 `--transfers 4 --buffer-size 32M`）。
+    /// 只做「按空格/引号切分后追加」，不校验语义；与本应用自己控制的参数冲突时会被拒绝。
+    pub extra_args: String,
     pub created_at: i64,
 }
 
@@ -136,9 +139,29 @@ impl Default for Connection {
             group: String::new(),
             use_system_proxy: false,
             probe_mode: "light".into(),
+            extra_args: String::new(),
             created_at: 0,
         }
     }
+}
+
+/// 一个连接的上传/下载流量账本。按天记账（`date` 变了就把 up/down 清零），
+/// `total_*` 是装机以来的累计值（不随日期清零）。
+/// 口径注意：rclone 的 `core/stats` 只给「收发合计」，方向是按「是否有活跃上传」推断的，
+/// 详见 `spawn_stats_monitor` 里的注释。
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+#[serde(default)]
+pub struct TrafficDay {
+    /// 记账日期（本地时区，YYYY-MM-DD）
+    pub date: String,
+    /// 今天上行（写远端）
+    pub up: u64,
+    /// 今天下行（从远端读）
+    pub down: u64,
+    /// 累计上行
+    pub total_up: u64,
+    /// 累计下行
+    pub total_down: u64,
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -213,6 +236,7 @@ pub struct ConnectionInput {
     pub group: String,
     pub use_system_proxy: bool,
     pub probe_mode: String,
+    pub extra_args: String,
 }
 
 impl Default for ConnectionInput {
@@ -243,6 +267,7 @@ impl Default for ConnectionInput {
             group: String::new(),
             use_system_proxy: false,
             probe_mode: "light".into(),
+            extra_args: String::new(),
         }
     }
 }

@@ -1,4 +1,5 @@
 mod autostart;
+mod crypt;
 mod diag;
 mod model;
 mod rclone;
@@ -6,7 +7,7 @@ mod settings;
 mod store;
 mod update;
 
-use model::{Connection, ConnectionInput, DiagResult, MountState, Protocol};
+use model::{Connection, ConnectionInput, DiagResult, MountState, Protocol, TrafficDay};
 use settings::Settings;
 use std::collections::HashMap;
 use std::process::Child;
@@ -16,6 +17,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager, State};
+use tauri_plugin_notification::NotificationExt;
 
 /// 一个进行中的挂载会话
 pub struct Session {
@@ -70,6 +72,15 @@ pub struct StatsSnapshot {
     pub latency_us: Option<u64>,
     /// 最近 40 次探测的延迟（微秒，0 表示这次失败），前端画折线用
     pub history: Vec<u32>,
+    /// 本次挂载的上行字节（写远端）。方向按「是否有活跃上传」推断，见 stats monitor 注释
+    pub up_bytes: u64,
+    /// 本次挂载的下行字节（读远端）
+    pub down_bytes: u64,
+    /// 今天 / 累计的上行、下行（来自落盘的流量账本，跨重启保留）
+    pub today_up: u64,
+    pub today_down: u64,
+    pub total_up: u64,
+    pub total_down: u64,
     /// 上一次采样的字节数，用来算瞬时速度（不落前端）
     #[serde(skip)]
     pub last_bytes: u64,
@@ -96,6 +107,8 @@ pub struct AppState {
     health: Mutex<HashMap<String, Health>>,
     /// 每个已挂载连接的实时统计（rc 采样 + 探测结果汇总）
     stats: Mutex<HashMap<String, StatsSnapshot>>,
+    /// 上传/下载账本（按连接 id），每 5 秒采样时累加，定期落盘
+    traffic: Mutex<HashMap<String, TrafficDay>>,
     /// 托盘是否创建成功：成功时关闭窗口改为"隐藏到托盘"
     tray_ready: AtomicBool,
 }
@@ -107,9 +120,53 @@ impl Default for AppState {
             errors: Mutex::new(HashMap::new()),
             health: Mutex::new(HashMap::new()),
             stats: Mutex::new(HashMap::new()),
+            traffic: Mutex::new(HashMap::new()),
             tray_ready: AtomicBool::new(false),
         }
     }
+}
+
+/// 账本日期键（本地时区）：跨天时把「今天」清零，累计值不动。
+fn today_key() -> String {
+    chrono::Local::now().format("%Y-%m-%d").to_string()
+}
+
+/// 从 rclone 日志尾部挑一句最适合放进通知的话：
+/// 优先最后一条 CRITICAL/ERROR/Failed，没有就退回最后一行非空内容。
+fn reason_line(tail: &str) -> String {
+    let pick = tail
+        .lines()
+        .filter(|l| {
+            let u = l.to_uppercase();
+            u.contains("CRITICAL") || u.contains("ERROR") || u.contains("FAILED")
+        })
+        .last()
+        .or_else(|| tail.lines().filter(|l| !l.trim().is_empty()).last())
+        .unwrap_or("");
+    // 去掉 rclone 的「日期 时间 级别:」前缀。注意不能按第一个冒号切：
+    // 时间本身就带冒号（09:46:21），会切在时间中间。
+    let mut out = pick.trim();
+    for marker in ["CRITICAL:", "ERROR:", "NOTICE:", "INFO:", "DEBUG:"] {
+        if let Some(i) = out.find(marker) {
+            out = out[i + marker.len()..].trim();
+            break;
+        }
+    }
+    out.chars().take(160).collect()
+}
+
+fn traffic_entry<'a>(
+    map: &'a mut HashMap<String, TrafficDay>,
+    id: &str,
+) -> &'a mut TrafficDay {
+    let today = today_key();
+    let entry = map.entry(id.to_string()).or_default();
+    if entry.date != today {
+        entry.date = today;
+        entry.up = 0;
+        entry.down = 0;
+    }
+    entry
 }
 
 fn now_secs() -> i64 {
@@ -235,6 +292,7 @@ fn to_connection(input: &ConnectionInput, existing: Option<&Connection>) -> Conn
             "full" | "light" | "process" => input.probe_mode.clone(),
             _ => "light".into(),
         },
+        extra_args: input.extra_args.trim().to_string(),
         created_at: existing.map(|c| c.created_at).unwrap_or_else(now_secs),
     }
 }
@@ -314,12 +372,37 @@ fn save_connection(
     if input.protocol == Protocol::Webdav && input.user.is_empty() {
         return Err("WebDAV 需要填写用户名".into());
     }
+    // 自定义参数先过一遍校验：写错了在这里就报出来，而不是等挂载时 rclone 莫名退出
+    let _ = rclone::parse_extra_args(&input.extra_args)?;
 
     let mut list = store::load_connections(&app);
     let idx = input
         .id
         .as_ref()
         .and_then(|id| list.iter().position(|c| &c.id == id));
+
+    // 盘符/挂载点冲突预检：别的连接正占着同一个位置时直接拒绝
+    let self_id = idx.map(|i| list[i].id.clone()).unwrap_or_default();
+    let target = input.target.trim();
+    // 编辑时位置没变就不用查系统占用——那个位置本来就是自己挂着的
+    let unchanged = idx
+        .map(|i| list[i].target.trim().eq_ignore_ascii_case(target))
+        .unwrap_or(false);
+    if !unchanged {
+        if let Some(other) = list
+            .iter()
+            .find(|c| c.id != self_id && c.target.trim().eq_ignore_ascii_case(target))
+        {
+            return Err(format!(
+                "{target} 已被连接「{}」占用，请换一个盘符或先停用它",
+                other.name
+            ));
+        }
+        if rclone::target_taken(target) {
+            return Err(format!("{target} 已被系统或其他程序占用，请换一个盘符"));
+        }
+    }
+
     let conn = to_connection(&input, idx.map(|i| &list[i]));
 
     let plain = if input.password.is_empty() {
@@ -353,13 +436,22 @@ fn save_connection(
 /// 详情页「节点历史」的数据源：本次挂载的吞吐、峰值、探测成功率、延迟曲线
 #[tauri::command]
 fn get_stats(state: State<'_, AppState>, id: String) -> StatsSnapshot {
-    state
+    let mut snap = state
         .stats
         .lock()
         .unwrap()
         .get(&id)
         .cloned()
-        .unwrap_or_default()
+        .unwrap_or_default();
+    // 今日/累计来自落盘账本，单独取（不在采样快照里，重启后也还在）
+    if let Some(t) = state.traffic.lock().unwrap().get(&id) {
+        let fresh = t.date == today_key();
+        snap.today_up = if fresh { t.up } else { 0 };
+        snap.today_down = if fresh { t.down } else { 0 };
+        snap.total_up = t.total_up;
+        snap.total_down = t.total_down;
+    }
+    snap
 }
 
 /// 把这次挂载的流量计数清零（峰值、累计、次数都归零）。
@@ -387,6 +479,8 @@ fn reset_stats(state: State<'_, AppState>, id: String) -> Result<(), String> {
     entry.peak_bps = 0;
     entry.transfers = 0;
     entry.errors = 0;
+    entry.up_bytes = 0;
+    entry.down_bytes = 0;
     entry.last_sample_ms = 0;
     Ok(())
 }
@@ -447,6 +541,8 @@ fn delete_connection(app: AppHandle, state: State<'_, AppState>, id: String) -> 
     state.errors.lock().unwrap().remove(&id);
     state.health.lock().unwrap().remove(&id);
     state.stats.lock().unwrap().remove(&id);
+    // 连接删了，它的流量账本也一起清掉：首页合计是按连接求和的，别留孤儿数据
+    state.traffic.lock().unwrap().remove(&id);
     let mut list = store::load_connections(&app);
     list.retain(|c| c.id != id);
     store::save_connections(&app, &list)?;
@@ -486,6 +582,16 @@ fn mount(app: AppHandle, state: State<'_, AppState>, id: String) -> Result<Mount
             .unwrap_or_default();
         state.errors.lock().unwrap().insert(id.clone(), tail.clone());
         let _ = app.emit("state-changed", ());
+        // 界面可能被收在托盘里，只有日志是看不见的 —— 让前端弹一条系统通知
+        let _ = app.emit(
+            "notify",
+            serde_json::json!({
+                "kind": "mount-failed",
+                "id": id,
+                "name": conn.name,
+                "reason": reason_line(&tail),
+            }),
+        );
         return Err(format!("挂载进程已退出。\n\n{tail}"));
     }
 
@@ -510,6 +616,9 @@ fn unmount(app: AppHandle, state: State<'_, AppState>, id: String) -> Result<(),
     state.errors.lock().unwrap().remove(&id);
     state.health.lock().unwrap().remove(&id);
     state.stats.lock().unwrap().remove(&id);
+    // 卸载时把账本落盘，避免下次启动丢掉最后这一分钟的流量
+    let snapshot = state.traffic.lock().unwrap().clone();
+    let _ = store::save_traffic(&app, &snapshot);
     let _ = app.emit("state-changed", ());
     Ok(())
 }
@@ -697,8 +806,11 @@ fn save_settings(app: AppHandle, s: Settings) -> Result<Settings, String> {
 
 /// 导出连接配置为 JSON 字符串。密码以 rclone obscure 形式附带（非明文），
 /// 没有密码的连接导出空值。由前端负责落盘（浏览器下载）。
+///
+/// 传了 `password` 就加密：返回的是带信封的 JSON（`encrypted: true`），
+/// 因为 `password_obscured` 是可逆的混淆串，明文导出等于把口令一起给出去。
 #[tauri::command]
-fn export_connections(app: AppHandle) -> Result<String, String> {
+fn export_connections(app: AppHandle, password: Option<String>) -> Result<String, String> {
     let list = store::load_connections(&app);
     let items: Vec<serde_json::Value> = list
         .iter()
@@ -719,15 +831,35 @@ fn export_connections(app: AppHandle) -> Result<String, String> {
         "exported_at": now_secs(),
         "connections": items,
     });
-    serde_json::to_string_pretty(&doc).map_err(|e| format!("序列化失败：{e}"))
+    let text = serde_json::to_string_pretty(&doc).map_err(|e| format!("序列化失败：{e}"))?;
+    match password.filter(|p| !p.is_empty()) {
+        Some(p) => crypt::encrypt(&text, &p),
+        None => Ok(text),
+    }
 }
 
 /// 导入连接配置：跳过与现有连接重名的条目，其余按合并方式追加，
 /// id 一律重新生成避免冲突。返回实际导入的条数。
+///
+/// 若文件是口令加密的信封，必须带 `password` 才能解开，否则报错让前端去问口令。
 #[tauri::command]
-fn import_connections(app: AppHandle, data: String) -> Result<usize, String> {
-    let doc: serde_json::Value =
+fn import_connections(
+    app: AppHandle,
+    data: String,
+    password: Option<String>,
+) -> Result<usize, String> {
+    let mut doc: serde_json::Value =
         serde_json::from_str(&data).map_err(|_| "文件不是有效的 JSON 配置".to_string())?;
+
+    if crypt::is_encrypted(&doc) {
+        let p = password.unwrap_or_default();
+        if p.is_empty() {
+            return Err("ENCRYPTED_NEED_PASSWORD".into());
+        }
+        let plain = crypt::decrypt(&doc, &p)?;
+        doc = serde_json::from_str(&plain).map_err(|_| "解密后的内容不是有效的配置".to_string())?;
+    }
+
     let items = doc
         .get("connections")
         .and_then(|v| v.as_array())
@@ -760,6 +892,91 @@ fn import_connections(app: AppHandle, data: String) -> Result<usize, String> {
         let _ = app.emit("connections-changed", ());
     }
     Ok(imported)
+}
+
+/// 首页概览用的全部连接流量合计
+#[derive(serde::Serialize, Default)]
+pub struct TrafficSummary {
+    pub today_up: u64,
+    pub today_down: u64,
+    pub total_up: u64,
+    pub total_down: u64,
+}
+
+#[tauri::command]
+fn traffic_summary(state: State<'_, AppState>) -> TrafficSummary {
+    let today = today_key();
+    let map = state.traffic.lock().unwrap();
+    let mut out = TrafficSummary::default();
+    for day in map.values() {
+        // 跨天但还没重新采样过的条目，今天的部分不算
+        if day.date == today {
+            out.today_up += day.up;
+            out.today_down += day.down;
+        }
+        out.total_up += day.total_up;
+        out.total_down += day.total_down;
+    }
+    out
+}
+
+/// 盘符/挂载点能不能用。前端在表单里实时调用，早点把冲突说清楚。
+#[derive(serde::Serialize)]
+pub struct TargetCheck {
+    pub available: bool,
+    /// "" / "other-connection" / "occupied"
+    pub reason: String,
+    /// 占用它的连接名（reason=other-connection 时有用）
+    pub owner: String,
+}
+
+#[tauri::command]
+fn check_target(app: AppHandle, target: String, exclude_id: String) -> TargetCheck {
+    let t = target.trim();
+    let ok = TargetCheck {
+        available: true,
+        reason: String::new(),
+        owner: String::new(),
+    };
+    if t.is_empty() {
+        return ok;
+    }
+    if let Some(other) = store::load_connections(&app)
+        .into_iter()
+        .find(|c| c.id != exclude_id && c.target.trim().eq_ignore_ascii_case(t))
+    {
+        return TargetCheck {
+            available: false,
+            reason: "other-connection".into(),
+            owner: other.name,
+        };
+    }
+    // 自己正挂在这个位置上，不算冲突
+    let mine = store::load_connections(&app)
+        .into_iter()
+        .find(|c| c.id == exclude_id)
+        .map(|c| c.target)
+        .unwrap_or_default();
+    if !mine.trim().eq_ignore_ascii_case(t) && rclone::target_taken(t) {
+        return TargetCheck {
+            available: false,
+            reason: "occupied".into(),
+            owner: String::new(),
+        };
+    }
+    ok
+}
+
+/// 弹一条系统通知。文案由前端按当前语言拼好再传进来，
+/// 这样通知和界面语言永远一致（后端不必再维护一套翻译表）。
+#[tauri::command]
+fn notify_user(app: AppHandle, title: String, body: String) -> Result<(), String> {
+    app.notification()
+        .builder()
+        .title(title)
+        .body(body)
+        .show()
+        .map_err(|e| format!("系统通知发送失败：{e}"))
 }
 
 /// 连接测试放到阻塞线程池里跑，避免 15 秒超时把界面卡住
@@ -832,12 +1049,23 @@ fn spawn_supervisor(app: AppHandle) {
                 let tail = store::mount_log_path(&app, &id)
                     .map(|p| rclone::tail_log(&p, 8))
                     .unwrap_or_default();
-                state.errors.lock().unwrap().insert(id.clone(), tail);
+                state.errors.lock().unwrap().insert(id.clone(), tail.clone());
 
                 if conn.reconnect && restarts < 5 {
                     // 退避：2s, 5s, 8s, 11s, 14s
                     std::thread::sleep(Duration::from_secs(2 + restarts as u64 * 3));
                     let _ = start_session(&app, &state, &conn, restarts + 1);
+                } else if conn.reconnect {
+                    // 连退 5 次都没起来，不再自动重试 —— 这时必须让人知道
+                    let _ = app.emit(
+                        "notify",
+                        serde_json::json!({
+                            "kind": "gave-up",
+                            "id": id,
+                            "name": conn.name,
+                            "reason": reason_line(&tail),
+                        }),
+                    );
                 }
             }
             let _ = app.emit("state-changed", ());
@@ -850,6 +1078,8 @@ fn spawn_supervisor(app: AppHandle) {
 fn spawn_stats_monitor(app: AppHandle) {
     std::thread::spawn(move || {
         std::thread::sleep(Duration::from_secs(12));
+        // 账本每 12 个采样（约 60 秒）落一次盘，避免每次采样都写文件
+        let mut ticks: u32 = 0;
         loop {
             std::thread::sleep(Duration::from_secs(5));
             let state = app.state::<AppState>();
@@ -867,6 +1097,8 @@ fn spawn_stats_monitor(app: AppHandle) {
                 let sample = rclone::rc_call(port, "core/stats");
                 let mut guard = state.stats.lock().unwrap();
                 let Some(entry) = guard.get_mut(&id) else { continue };
+                // 这一轮移动了多少字节、算上行还是下行（出了这段再更新账本，避免嵌套锁）
+                let mut moved: Option<(u64, bool)> = None;
                 match sample {
                     Some(v) => {
                         let bytes = v.get("bytes").and_then(|x| x.as_u64()).unwrap_or(0);
@@ -896,10 +1128,48 @@ fn spawn_stats_monitor(app: AppHandle) {
                             .get("elapsedTime")
                             .and_then(|x| x.as_f64())
                             .unwrap_or(0.0) as u64;
+
+                        // 方向判定：rclone 的 core/stats 只有「收发合计」，没有分向字段
+                        // （core/stats 与 vfs/stats 都实测过）。但挂载读远端走的是 VFS 读句柄，
+                        // 不会出现在 transferring 里；出现在里面的都是「写远端」的上传。
+                        // 所以：有活跃上传时这段增量记上行，否则记下行。
+                        // 同时读写的极端情况下会偏向一端，属于已知近似。
+                        let uploading = v
+                            .get("transferring")
+                            .and_then(|x| x.as_array())
+                            .map(|a| !a.is_empty())
+                            .unwrap_or(false);
+                        if delta > 0 {
+                            if uploading {
+                                entry.up_bytes = entry.up_bytes.saturating_add(delta);
+                            } else {
+                                entry.down_bytes = entry.down_bytes.saturating_add(delta);
+                            }
+                            moved = Some((delta, uploading));
+                        }
                     }
                     // 进程刚起或已退出：速度归零，别把上一次的数字挂着骗人
                     None => entry.speed_bps = 0,
                 }
+                drop(guard);
+
+                if let Some((delta, uploading)) = moved {
+                    let mut ledger = state.traffic.lock().unwrap();
+                    let day = traffic_entry(&mut ledger, &id);
+                    if uploading {
+                        day.up = day.up.saturating_add(delta);
+                        day.total_up = day.total_up.saturating_add(delta);
+                    } else {
+                        day.down = day.down.saturating_add(delta);
+                        day.total_down = day.total_down.saturating_add(delta);
+                    }
+                }
+            }
+
+            ticks += 1;
+            if ticks % 12 == 0 {
+                let snapshot = state.traffic.lock().unwrap().clone();
+                let _ = store::save_traffic(&app, &snapshot);
             }
         }
     });
@@ -1114,10 +1384,15 @@ fn build_tray(app: &tauri::App) -> tauri::Result<()> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_notification::init())
         .manage(AppState::default())
         .setup(|app| {
             // 托盘失败不应阻止应用启动，只是失去"最小化到托盘"能力
             let _ = build_tray(app);
+
+            // 载入落盘的流量账本（今日/累计都在里面）
+            let ledger = store::load_traffic(app.handle());
+            *app.state::<AppState>().traffic.lock().unwrap() = ledger;
 
             // 静默启动：仅当「通过开机自启动拉起（--silent）」且设置勾选了静默时，
             // 才不弹主界面；手动双击图标永远显示窗口。
@@ -1172,6 +1447,9 @@ pub fn run() {
             get_stats,
             reset_stats,
             probe_now,
+            traffic_summary,
+            check_target,
+            notify_user,
             export_connections,
             import_connections
         ])
