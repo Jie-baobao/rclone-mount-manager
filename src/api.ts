@@ -112,7 +112,10 @@ export function fmtLatency(us: number | null | undefined): string {
 
 /**
  * 本次挂载的统计数据（后端每 5 秒从 rclone 的本机 rc 端口采一次，只在内存里）。
- * 注意：speed_bps 是读写合计——rclone 的统计不区分上行/下行。
+ *
+ * 口径提醒：rclone 的 core/stats 只有「收 + 发」合计的字节数，不区分上下行；
+ * 而且它是**挂载开始以来的累计值**，含重复读取、重试与预取，所以 total_bytes
+ * 不等于「复制了多少文件」。想单独量一次拷贝，先点「清零重计」再操作。
  */
 export interface Stats {
   speed_bps: number;
@@ -191,6 +194,8 @@ export const api = {
   states: () => call<MountState[]>("mount_states"),
   readLog: (id: string) => call<string>("read_log", { id }),
   getStats: (id: string) => call<Stats>("get_stats", { id }),
+  /** 把本次挂载的流量计数清零（峰值、累计、次数），便于单独量一次拷贝 */
+  resetStats: (id: string) => call<void>("reset_stats", { id }),
   /** 手动做一次完整探测（真实列目录），返回微秒；会让 NAS 读一次目录 */
   probeNow: (id: string) => call<number>("probe_now", { id }),
   revealPassword: (id: string) => call<string | null>("reveal_password", { id }),

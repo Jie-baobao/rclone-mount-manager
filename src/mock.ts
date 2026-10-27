@@ -187,6 +187,8 @@ function reply(cmd: string, args?: Record<string, unknown>): unknown {
     case "probe_now":
       // 浏览器预览下假装跑了一次完整探测：42ms（真实环境是列一次目录的耗时）
       return 42_000;
+    case "reset_stats":
+      return null;
     case "get_stats":
       return {
         speed_bps: 1_843_200,

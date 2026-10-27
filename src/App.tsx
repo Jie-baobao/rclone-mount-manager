@@ -123,6 +123,12 @@ export default function App() {
     }
   }, []);
 
+  // 详情页是滚动容器：切连接时回到顶部，否则会停在上一条的滚动位置
+  const mainRef = useRef<HTMLElement | null>(null);
+  useEffect(() => {
+    mainRef.current?.scrollTo({ top: 0 });
+  }, [selected]);
+
   const loadStats = useCallback(async (id: string) => {
     try {
       setStats(await api.getStats(id));
@@ -418,7 +424,8 @@ export default function App() {
       {/* 点主区真正空白的背景（面板之间的留白）也取消选中回到首页；
           面板内部的空白（日志区、卡片、图表）有自己的元素，target 不会等于 main，不会误触 */}
       <main
-        className="main"
+        ref={mainRef}
+        className={`main ${current ? "detail" : ""}`}
         onClick={(e) => {
           if (e.target === e.currentTarget) setSelected(null);
         }}
@@ -572,6 +579,7 @@ export default function App() {
               mode={current.probe_mode}
               threshold={settings?.latency_threshold_ms ?? 1200}
               intervalSecs={settings?.probe_interval_secs ?? 15}
+              onReset={() => current && void loadStats(current.id)}
               t={t}
             />
 

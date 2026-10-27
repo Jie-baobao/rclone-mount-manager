@@ -73,6 +73,9 @@ pub struct StatsSnapshot {
     /// 上一次采样的字节数，用来算瞬时速度（不落前端）
     #[serde(skip)]
     pub last_bytes: u64,
+    /// 上一次采样的时间（毫秒时间戳），用真实间隔算速度，避免线程抖动把速度算歪
+    #[serde(skip)]
+    pub last_sample_ms: u64,
 }
 
 impl StatsSnapshot {
@@ -113,6 +116,13 @@ fn now_secs() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+fn now_millis() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
         .unwrap_or(0)
 }
 
@@ -350,6 +360,35 @@ fn get_stats(state: State<'_, AppState>, id: String) -> StatsSnapshot {
         .get(&id)
         .cloned()
         .unwrap_or_default()
+}
+
+/// 把这次挂载的流量计数清零（峰值、累计、次数都归零）。
+///
+/// 用途：想单独量「复制这一个文件到底花了多少流量」时先点清零再操作。
+/// 只动内存里的统计和 rclone 自己的计数器，不影响挂载本身。
+#[tauri::command]
+fn reset_stats(state: State<'_, AppState>, id: String) -> Result<(), String> {
+    let port = state
+        .sessions
+        .lock()
+        .unwrap()
+        .get(&id)
+        .map(|s| s.rc_port)
+        .unwrap_or(0);
+    if port != 0 {
+        // rclone 侧的累计量也要清，否则下一次采样又会被读回来
+        let _ = rclone::rc_call(port, "core/stats-reset");
+    }
+    let mut guard = state.stats.lock().unwrap();
+    let entry = guard.entry(id).or_default();
+    entry.total_bytes = 0;
+    entry.last_bytes = 0;
+    entry.speed_bps = 0;
+    entry.peak_bps = 0;
+    entry.transfers = 0;
+    entry.errors = 0;
+    entry.last_sample_ms = 0;
+    Ok(())
 }
 
 /// 手动做一次「完整探测」，返回微秒。
@@ -819,7 +858,16 @@ fn spawn_stats_monitor(app: AppHandle) {
                     Some(v) => {
                         let bytes = v.get("bytes").and_then(|x| x.as_u64()).unwrap_or(0);
                         let delta = bytes.saturating_sub(entry.last_bytes);
-                        entry.speed_bps = delta / 5;
+                        // 速度按**两次采样的真实间隔**算：线程睡 5 秒实际可能是 5.3 秒，
+                        // 用固定 5 除会把速度算高，短时突发也会失真
+                        let now_ms = now_millis();
+                        let dt = if entry.last_sample_ms == 0 {
+                            5.0
+                        } else {
+                            ((now_ms.saturating_sub(entry.last_sample_ms)) as f64 / 1000.0).clamp(0.5, 60.0)
+                        };
+                        entry.speed_bps = (delta as f64 / dt).round() as u64;
+                        entry.last_sample_ms = now_ms;
                         if entry.speed_bps > entry.peak_bps {
                             entry.peak_bps = entry.speed_bps;
                         }
@@ -1108,6 +1156,7 @@ pub fn run() {
             get_settings,
             save_settings,
             get_stats,
+            reset_stats,
             probe_now,
             export_connections,
             import_connections

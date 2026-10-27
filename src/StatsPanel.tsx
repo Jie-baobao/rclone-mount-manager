@@ -198,6 +198,7 @@ export default function StatsPanel({
   mode,
   threshold,
   intervalSecs,
+  onReset,
   t,
 }: {
   stats: Stats | null;
@@ -205,6 +206,8 @@ export default function StatsPanel({
   mode: ProbeMode;
   threshold: number;
   intervalSecs: number;
+  /** 清零后让父组件立即重拉一次统计 */
+  onReset?: () => void;
   t: T;
 }) {
   const s = stats;
@@ -214,6 +217,15 @@ export default function StatsPanel({
   const rate = total > 0 ? Math.round((ok / total) * 100) : null;
   const mounted = !!state?.mounted;
   const tracksLatency = mode !== "process";
+
+  // 折叠状态记在本地：高级设置是原生 details，这里也一样，只是多记一个开关
+  const [open, setOpen] = useState(() => {
+    try {
+      return localStorage.getItem("rmm.statsOpen") !== "0";
+    } catch {
+      return true;
+    }
+  });
 
   // 「测一次真实延迟」：用户主动点才跑完整探测，只跑一次，不参与定时轮询
   const [measuring, setMeasuring] = useState(false);
@@ -238,14 +250,35 @@ export default function StatsPanel({
   const max = good.length ? Math.max(...good) : 0;
   const avg = good.length ? Math.round(good.reduce((a, b) => a + b, 0) / good.length) : 0;
 
+  // 把这次挂载的计数清零：想单独量一次拷贝花了多少流量时用
+  async function resetFlow() {
+    if (!state?.id) return;
+    try {
+      await api.resetStats(state.id);
+      onReset?.();
+    } catch {
+      /* 挂载已停等场景直接忽略，下次采样会覆盖 */
+    }
+  }
+
   return (
-    <section className="panel">
-      <div className="panel-head">
+    <details
+      className="panel details"
+      open={open}
+      onToggle={(e) => {
+        const next = e.currentTarget.open;
+        setOpen(next);
+        try {
+          localStorage.setItem("rmm.statsOpen", next ? "1" : "0");
+        } catch {
+          /* 隐私模式下写不了，纯体验问题 */
+        }
+      }}
+    >
+      <summary className="panel-summary">
         <h3>{t("stats.title")}</h3>
-        <div className="panel-tools">
-          <span className="muted small">{mounted ? t("stats.note") : t("stats.idle")}</span>
-        </div>
-      </div>
+        <span className="muted small">{mounted ? t("stats.note") : t("stats.idle")}</span>
+      </summary>
 
       <div className="stat-grid">
         <div className="stat">
@@ -253,10 +286,20 @@ export default function StatsPanel({
           <strong>{fmtSpeed(s?.speed_bps ?? 0)}</strong>
           <small>{t("stats.peak", { v: fmtSpeed(s?.peak_bps ?? 0) })}</small>
         </div>
-        <div className="stat">
+        <div className="stat has-reset" title={t("stats.totalHint")}>
           <label>{t("stats.total")}</label>
           <strong>{fmtBytes(s?.total_bytes ?? 0)}</strong>
           <small>{t("stats.transfers", { n: s?.transfers ?? 0, e: s?.errors ?? 0 })}</small>
+          {mounted && (
+            <button
+              className="stat-reset"
+              title={t("stats.resetTip")}
+              aria-label={t("stats.reset")}
+              onClick={() => void resetFlow()}
+            >
+              ↺
+            </button>
+          )}
         </div>
         <div className="stat">
           <label>{t("stats.success")}</label>
@@ -314,6 +357,6 @@ export default function StatsPanel({
           <p className="muted small">{tracksLatency ? t("stats.noHistory") : t("stats.probeNa")}</p>
         )}
       </div>
-    </section>
+    </details>
   );
 }
