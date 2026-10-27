@@ -1135,6 +1135,24 @@ input::-webkit-credentials-auto-fill-button {
   margin-bottom: 4px;
 }
 
+/* 右侧：阈值说明 + 「测一次真实延迟」，窄屏允许换行 */
+.spark-tools {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.spark-tools .btn.small {
+  padding: 2px 8px;
+  font-size: 11px;
+}
+
+.bad-text {
+  color: var(--danger);
+}
+
 .spark {
   width: 100%;
   height: 56px;

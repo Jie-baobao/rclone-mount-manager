@@ -31,7 +31,8 @@ pub struct Session {
 pub struct Health {
     /// healthy / slow / error
     pub state: &'static str,
-    pub latency_ms: Option<u64>,
+    /// 探测耗时，单位**微秒**（轻量探测的局域网握手常在 1ms 以内，毫秒精度看不出来）
+    pub latency_us: Option<u64>,
     pub last_check: i64,
     /// 连续失败次数：1~2 次算「波动」，3 次以上才算「故障」
     pub fails: u32,
@@ -41,7 +42,7 @@ impl Default for Health {
     fn default() -> Self {
         Self {
             state: "healthy",
-            latency_ms: None,
+            latency_us: None,
             last_check: 0,
             fails: 0,
         }
@@ -65,8 +66,9 @@ pub struct StatsSnapshot {
     /// 探测成功 / 失败次数
     pub probes_ok: u64,
     pub probes_fail: u64,
-    pub latency_ms: Option<u64>,
-    /// 最近 40 次探测的延迟（0 表示这次失败），前端画折线用
+    /// 最近一次探测耗时（微秒）；「仅进程」模式没有网络往返，这里是 None
+    pub latency_us: Option<u64>,
+    /// 最近 40 次探测的延迟（微秒，0 表示这次失败），前端画折线用
     pub history: Vec<u32>,
     /// 上一次采样的字节数，用来算瞬时速度（不落前端）
     #[serde(skip)]
@@ -74,8 +76,8 @@ pub struct StatsSnapshot {
 }
 
 impl StatsSnapshot {
-    fn push_history(&mut self, ms: Option<u64>) {
-        self.history.push(ms.unwrap_or(0).min(u32::MAX as u64) as u32);
+    fn push_history(&mut self, us: Option<u64>) {
+        self.history.push(us.unwrap_or(0).min(u32::MAX as u64) as u32);
         if self.history.len() > 40 {
             let drop = self.history.len() - 40;
             self.history.drain(0..drop);
@@ -167,6 +169,17 @@ fn cleanup_old_logs(app: &AppHandle, cfg: &Settings) {
 /// 时间戳，探测日志用
 fn timestamp() -> String {
     chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string()
+}
+
+/// 微秒 → 人能读的延迟文本：0.42ms 写成 "0.42 ms"，42ms 就写整数
+fn fmt_ms(us: u64) -> String {
+    if us < 1_000 {
+        format!("{:.2} ms", us as f64 / 1000.0)
+    } else if us < 1_000_000 {
+        format!("{:.0} ms", us as f64 / 1000.0)
+    } else {
+        format!("{:.1} s", us as f64 / 1_000_000.0)
+    }
 }
 
 /// 表单 → 连接对象。编辑时沿用旧的 id / 创建时间 / 置顶状态。
@@ -339,6 +352,42 @@ fn get_stats(state: State<'_, AppState>, id: String) -> StatsSnapshot {
         .unwrap_or_default()
 }
 
+/// 手动做一次「完整探测」，返回微秒。
+///
+/// 轻量探测只测 TCP 握手（不到 1ms，不代表读写延迟），用户想看真实数字时点一下这个。
+/// 由用户主动触发、只跑一次，不会像定时探测那样把休眠硬盘反复唤醒。
+#[tauri::command]
+fn probe_now(app: AppHandle, id: String) -> Result<u64, String> {
+    let list = store::load_connections(&app);
+    let conn = list
+        .iter()
+        .find(|c| c.id == id)
+        .ok_or_else(|| "连接不存在".to_string())?;
+    let cfg = settings::load(&app);
+    let started = std::time::Instant::now();
+    let result = rclone::probe_latency(&app, conn, 8);
+    match &result {
+        Ok(us) => append_probe_log(
+            &app,
+            &id,
+            &cfg,
+            &format!("[手动探测 {}] 完整探测 · {}", timestamp(), fmt_ms(*us)),
+        ),
+        Err(e) => append_probe_log(
+            &app,
+            &id,
+            &cfg,
+            &format!(
+                "[手动探测 {}] 失败（{:.1}s）· {}",
+                timestamp(),
+                started.elapsed().as_secs_f64(),
+                e
+            ),
+        ),
+    }
+    result
+}
+
 #[tauri::command]
 fn set_pinned(app: AppHandle, id: String, pinned: bool) -> Result<(), String> {
     let mut list = store::load_connections(&app);
@@ -469,8 +518,8 @@ fn state_snapshot(app: &AppHandle, state: &AppState, conn: &Connection) -> Mount
         .as_ref()
         .map(|h| h.state.to_string())
         .unwrap_or_else(|| "healthy".into());
-    let latency_ms = if mounted {
-        health.as_ref().and_then(|h| h.latency_ms)
+    let latency_us = if mounted {
+        health.as_ref().and_then(|h| h.latency_us)
     } else {
         None
     };
@@ -487,7 +536,7 @@ fn state_snapshot(app: &AppHandle, state: &AppState, conn: &Connection) -> Mount
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_default(),
         health: if mounted { health_state } else { "stopped".into() },
-        latency_ms,
+        latency_us,
         last_check,
     }
 }
@@ -838,33 +887,35 @@ fn spawn_health_monitor(app: AppHandle) {
                         _ => rclone::tcp_probe(conn, 8),
                     };
                     let ok_ms = result.as_ref().ok().copied();
+                    // 「仅进程」模式只看进程存活，没有网络往返，不产生延迟样本
+                    let tracks_latency = conn.probe_mode != "process";
                     let now = now_secs();
 
                     let mut guard = state.health.lock().unwrap();
                     let entry = guard.entry(id.clone()).or_default();
-                    let before = (entry.state, entry.latency_ms);
+                    let before = (entry.state, entry.latency_us);
 
                     match result {
-                        Ok(ms) => {
+                        Ok(us) => {
                             entry.fails = 0;
-                            // 「仅进程」模式没有网络往返，延迟记成 0 而不是假装有个数字
-                            entry.latency_ms = if conn.probe_mode == "process" { Some(0) } else { Some(ms) };
+                            entry.latency_us = if tracks_latency { Some(us) } else { None };
+                            let ms = us as f64 / 1000.0;
                             // 单次探测超过阈值 → 黄（网络波动）
-                            entry.state = if ms > cfg.latency_threshold_ms {
+                            entry.state = if ms > cfg.latency_threshold_ms as f64 {
                                 "slow"
                             } else {
                                 "healthy"
                             };
-                            let ok_text = if conn.probe_mode == "process" {
-                                format!("[探测 {}] 挂载进程存活", timestamp())
+                            let ok_text = if tracks_latency {
+                                format!("[探测 {}] 正常 · {}", timestamp(), fmt_ms(us))
                             } else {
-                                format!("[探测 {}] 正常 · {} ms", timestamp(), ms)
+                                format!("[探测 {}] 挂载进程存活", timestamp())
                             };
                             append_probe_log(&app, &id, &cfg, &ok_text);
                         }
                         Err(e) => {
                             entry.fails = entry.fails.saturating_add(1);
-                            entry.latency_ms = None;
+                            entry.latency_us = None;
                             // 连续失败次数决定颜色：≥error_fails 红，≥warn_fails 黄
                             if entry.fails >= cfg.error_fails {
                                 entry.state = "error";
@@ -912,19 +963,21 @@ fn spawn_health_monitor(app: AppHandle) {
                         let mut sg = state.stats.lock().unwrap();
                         let st = sg.entry(id.clone()).or_default();
                         match ok_ms {
-                            Some(ms) => {
+                            Some(us) => {
                                 st.probes_ok += 1;
-                                st.latency_ms = Some(ms);
-                                st.push_history(Some(ms));
+                                st.latency_us = if tracks_latency { Some(us) } else { None };
+                                if tracks_latency {
+                                    st.push_history(Some(us));
+                                }
                             }
                             None => {
                                 st.probes_fail += 1;
-                                st.latency_ms = None;
+                                st.latency_us = None;
                                 st.push_history(None);
                             }
                         }
                     }
-                    if before != (entry.state, entry.latency_ms) {
+                    if before != (entry.state, entry.latency_us) {
                         changed = true;
                     }
                 }
@@ -1055,6 +1108,7 @@ pub fn run() {
             get_settings,
             save_settings,
             get_stats,
+            probe_now,
             export_connections,
             import_connections
         ])

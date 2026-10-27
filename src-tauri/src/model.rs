@@ -153,7 +153,7 @@ pub struct MountState {
     /// healthy（绿）/ slow（黄）/ error（红）/ stopped（灰）
     pub health: String,
     /// 最近一次探测的往返毫秒数
-    pub latency_ms: Option<u64>,
+    pub latency_us: Option<u64>,
     /// 最近一次探测时间（unix 秒）
     pub last_check: Option<i64>,
 }

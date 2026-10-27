@@ -83,8 +83,31 @@ export interface MountState {
   last_error: string | null;
   log_path: string;
   health: Health;
-  latency_ms: number | null;
+  /** 最近一次探测耗时，单位微秒（轻量探测的局域网握手常在 1ms 以内） */
+  latency_us: number | null;
   last_check: number | null;
+}
+
+/**
+ * 延迟数字的「口径」：轻量探测量的是 TCP 握手往返，完整探测量的是列一次目录的耗时，
+ * 两者差一个数量级，展示时必须标清楚，不然用户会以为探测量错了。
+ */
+export function probeKindLabel(mode: ProbeMode | undefined, t: T): string {
+  if (mode === "full") return t("probe.kindFull");
+  if (mode === "process") return t("probe.kindProcess");
+  return t("probe.kindTcp");
+}
+
+/**
+ * 把微秒格式化成好读的延迟文本。
+ * 亚毫秒保留两位（0.42 ms），10ms 以上取整，超过 1 秒换成秒。
+ */
+export function fmtLatency(us: number | null | undefined): string {
+  if (us == null) return "—";
+  if (us < 1_000) return `${(us / 1000).toFixed(2)} ms`;
+  if (us < 10_000) return `${(us / 1000).toFixed(1)} ms`;
+  if (us < 1_000_000) return `${Math.round(us / 1000)} ms`;
+  return `${(us / 1_000_000).toFixed(1)} s`;
 }
 
 /**
@@ -100,8 +123,8 @@ export interface Stats {
   elapsed_secs: number;
   probes_ok: number;
   probes_fail: number;
-  latency_ms: number | null;
-  /** 最近 40 次探测延迟，0 表示这次失败 */
+  latency_us: number | null;
+  /** 最近 40 次探测延迟（微秒），0 表示这次失败 */
   history: number[];
 }
 
@@ -168,6 +191,8 @@ export const api = {
   states: () => call<MountState[]>("mount_states"),
   readLog: (id: string) => call<string>("read_log", { id }),
   getStats: (id: string) => call<Stats>("get_stats", { id }),
+  /** 手动做一次完整探测（真实列目录），返回微秒；会让 NAS 读一次目录 */
+  probeNow: (id: string) => call<number>("probe_now", { id }),
   revealPassword: (id: string) => call<string | null>("reveal_password", { id }),
   openTarget: (id: string) => call<void>("open_target", { id }),
   getAutostart: () => call<boolean>("get_autostart"),
@@ -253,6 +278,6 @@ export function healthOf(state: MountState | undefined, t: T): { cls: string; la
 export function healthTip(state: MountState | undefined, t: T): string {
   if (!state) return "";
   if (!state.mounted) return state.last_error ? `${t("h.lastFail")} · ${state.last_error.split("\n")[0]}` : t("h.stopped");
-  if (state.latency_ms != null) return `${healthOf(state, t).label} · ${state.latency_ms} ms`;
+  if (state.latency_us != null) return `${healthOf(state, t).label} · ${fmtLatency(state.latency_us)}`;
   return healthOf(state, t).label;
 }

@@ -7,9 +7,11 @@ import StatsPanel from "./StatsPanel";
 import {
   api,
   events,
+  fmtLatency,
   healthOf,
   healthTip,
   isWindows,
+  probeKindLabel,
   PROTOCOL_META,
   formatUptimeT,
   type Connection,
@@ -441,7 +443,9 @@ export default function App() {
                 <span className={`badge ${currentState?.mounted ? "on" : ""}`}>
                   {currentState?.mounted
                     ? `${healthOf(currentState, t).label} ${current.target}${
-                        currentState.latency_ms != null ? ` · ${currentState.latency_ms}ms` : ""
+                        currentState.latency_us != null
+                          ? ` · ${probeKindLabel(current.probe_mode, t)} ${fmtLatency(currentState.latency_us)}`
+                          : ""
                       }`
                     : t("app.unmounted")}
                 </span>
@@ -486,8 +490,10 @@ export default function App() {
                   <label>{t("app.kvQuality")}</label>
                   <span>
                     {currentState?.mounted
-                      ? currentState.latency_ms != null
-                        ? `${healthOf(currentState, t).label}（${currentState.latency_ms} ms）`
+                      ? currentState.latency_us != null
+                        ? `${healthOf(currentState, t).label}（${probeKindLabel(current.probe_mode, t)} ${fmtLatency(
+                            currentState.latency_us
+                          )}）`
                         : healthOf(currentState, t).label
                       : "—"}
                   </span>
@@ -563,6 +569,7 @@ export default function App() {
             <StatsPanel
               stats={stats}
               state={currentState}
+              mode={current.probe_mode}
               threshold={settings?.latency_threshold_ms ?? 1200}
               intervalSecs={settings?.probe_interval_secs ?? 15}
               t={t}

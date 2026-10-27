@@ -1,4 +1,4 @@
-import { healthOf, healthTip, PROTOCOL_META, type Connection, type MountState } from "./api";
+import { fmtLatency, healthOf, healthTip, PROTOCOL_META, type Connection, type MountState } from "./api";
 import type { T } from "./i18n";
 
 /**
@@ -82,7 +82,7 @@ export default function Dashboard({
                       <span className="tag mono">{c.target}</span>
                       <span className="home-list-state">
                         {h.label}
-                        {st?.latency_ms != null ? ` · ${st.latency_ms} ms` : ""}
+                        {st?.latency_us != null ? ` · ${fmtLatency(st.latency_us)}` : ""}
                       </span>
                     </li>
                   );

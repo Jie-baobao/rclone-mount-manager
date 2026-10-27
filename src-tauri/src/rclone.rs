@@ -664,9 +664,9 @@ pub fn tail_log(path: &Path, max_lines: usize) -> String {
     lines[start..].join("\n")
 }
 
-/// 对一条连接做一次轻量探测，返回往返毫秒数。
+/// 完整探测：真实列一次根目录，返回**微秒**（含 rclone 进程启动开销）。
 ///
-/// 用 `rclone lsd --max-depth 0` 而不是 ping：走的是真实协议栈，
+/// 用 `rclone lsd --max-depth 1` 而不是 ping：走的是真实协议栈，
 /// 能同时反映「网络慢」和「认证被拒 / 服务端异常」两种情况。
 ///
 /// **注意碰盘**：lsd 会让 NAS 读一次目录元数据，会把休眠中的硬盘唤醒。
@@ -719,7 +719,7 @@ pub fn probe_latency(app: &AppHandle, conn: &Connection, timeout_secs: u64) -> R
         match child.try_wait() {
             Ok(Some(status)) => {
                 if status.success() {
-                    return Ok(started.elapsed().as_millis() as u64);
+                    return Ok(started.elapsed().as_micros() as u64);
                 }
                 let mut buf = String::new();
                 if let Some(mut err) = child.stderr.take() {
@@ -749,6 +749,12 @@ pub fn probe_latency(app: &AppHandle, conn: &Connection, timeout_secs: u64) -> R
 
 /// 轻量探测：只做一次 TCP 握手，不发起任何文件系统请求。
 /// 完全不碰盘，NAS 硬盘可以安心休眠；代价是测不出「服务活着但文件层异常」的情况。
+///
+/// 返回值单位是**微秒**：局域网握手本来就在 1ms 以内，用毫秒取整会永远显示 1，
+/// 看不出任何波动，所以这里保留微秒精度，由界面决定怎么展示。
+///
+/// 注意语义：这个数字只是 TCP 三次握手的往返时间（相当于 ping 端口），
+/// **不代表**一次目录读写要多久——后者要读元数据，通常是个位数到几十毫秒。
 pub fn tcp_probe(conn: &Connection, timeout_secs: u64) -> Result<u64, String> {
     use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
 
@@ -777,7 +783,7 @@ pub fn tcp_probe(conn: &Connection, timeout_secs: u64) -> Result<u64, String> {
     for addr in &addrs {
         // IPv6 回环不该走外网代理，TcpStream 本来就不经代理，这里保持直连即可
         match TcpStream::connect_timeout(addr, timeout) {
-            Ok(_) => return Ok(started.elapsed().as_millis() as u64),
+            Ok(_) => return Ok(started.elapsed().as_micros() as u64),
             Err(e) => last_err = format!("{addr}：{e}"),
         }
     }

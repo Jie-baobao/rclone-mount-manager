@@ -1,4 +1,12 @@
-import type { Stats, MountState } from "./api";
+import { useState } from "react";
+import {
+  api,
+  fmtLatency,
+  probeKindLabel,
+  type ProbeMode,
+  type Stats,
+  type MountState,
+} from "./api";
 import type { T } from "./i18n";
 
 /** 图里只画最近这么多次探测：数据量固定，节点跑一整天也不会拖慢界面 */
@@ -21,19 +29,26 @@ function fmtSpeed(bps: number): string {
   return `${fmtBytes(bps)}/s`;
 }
 
-/** Y 轴上限取「整齐数」：1 / 2 / 5 × 10^n，刻度才好读 */
-function niceMax(v: number): number {
-  if (!isFinite(v) || v <= 0) return 100;
-  const pow = Math.pow(10, Math.floor(Math.log10(v)));
-  const n = v / pow;
-  const step = n <= 1 ? 1 : n <= 2 ? 2 : n <= 5 ? 5 : 10;
-  return step * pow;
+/**
+ * Y 轴步长：从「整齐数」里挑一个，让 max = 步长 × 4 刚好容得下峰值。
+ * 亚毫秒也要有得选（0.1 / 0.2 ms），否则轻量探测的曲线永远贴在基线上。
+ */
+const STEPS_MS = [0.1, 0.2, 0.5, 1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000];
+const STEPS_MS_BIG = [10000, 20000, 50000, 100000, 200000];
+
+function pickStep(peakMs: number): number {
+  const need = peakMs * 1.15;
+  for (const s of [...STEPS_MS, ...STEPS_MS_BIG]) {
+    if (s * 4 >= need) return s;
+  }
+  return 500000;
 }
 
-/** 刻度文字：1200 → 1.2k，避免四位数字挤在一起 */
-function fmtTick(v: number): string {
-  if (v >= 1000) return `${(v / 1000).toFixed(v % 1000 === 0 ? 0 : 1)}k`;
-  return String(Math.round(v));
+/** 刻度文字：0.1 → "0.1"，10 → "10"，1500 → "1.5k" */
+function fmtTick(ms: number, step: number): string {
+  if (ms >= 1000) return `${(ms / 1000).toFixed(ms % 1000 === 0 ? 0 : 1)}k`;
+  if (step < 1) return ms.toFixed(1);
+  return String(Math.round(ms));
 }
 
 /** 时间跨度：300 秒 → 5m，90 秒 → 90s */
@@ -45,8 +60,8 @@ function fmtSpan(secs: number): string {
 
 /**
  * 延迟折线：带 Y 轴数值、横向参考网格线、阈值虚线与 X 轴时间刻度。
- * 只取最近 WINDOW 次探测（按探测间隔换算出实际时间段）。
- * 0 表示这次探测失败，用红点标在基线上。
+ * 输入单位是**微秒**，纵轴按毫秒显示并自适应刻度（0.1ms 起）。
+ * 只取最近 WINDOW 次探测；0 表示这次探测失败，用红点标在基线上。
  */
 function LatencyChart({
   data,
@@ -62,23 +77,24 @@ function LatencyChart({
   const W = 560;
   const H = 176;
   // 上方留出 22px，给 Y 轴单位「ms」腾位置，不然会和最高刻度贴在一起
-  const PAD = { l: 42, r: 16, t: 22, b: 24 };
+  const PAD = { l: 46, r: 16, t: 22, b: 24 };
   const plotW = W - PAD.l - PAD.r;
   const plotH = H - PAD.t - PAD.b;
 
   const pts = data.slice(-WINDOW);
   const values = pts.filter((v) => v > 0);
-  const peak = values.length ? Math.max(...values) : 0;
-  const max = niceMax(Math.max(peak * 1.2, 60));
+  const peakMs = values.length ? Math.max(...values) / 1000 : 0;
+  const step = pickStep(peakMs);
+  const maxMs = step * 4;
 
   const stepX = pts.length > 1 ? plotW / (pts.length - 1) : 0;
   const x = (i: number) => PAD.l + i * stepX;
-  const y = (v: number) => PAD.t + plotH - (Math.min(Math.max(v, 0), max) / max) * plotH;
+  const y = (us: number) => PAD.t + plotH - (Math.min(us / 1000, maxMs) / maxMs) * plotH;
 
   // Y 轴：0 / 1/4 / 1/2 / 3/4 / 上限，四条网格线 + 数值
-  const ticks = [0, 0.25, 0.5, 0.75, 1].map((f) => Math.round(max * f));
+  const ticks = [0, 1, 2, 3, 4].map((i) => i * step);
   // 阈值线只有在画得进来的时候才画，否则会把曲线压成一条直线
-  const showThreshold = threshold > 0 && threshold <= max;
+  const showThreshold = threshold > 0 && threshold <= maxMs;
 
   const line = pts.map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(" ");
   const area = `${PAD.l},${y(0).toFixed(1)} ${line} ${x(pts.length - 1).toFixed(1)},${y(0).toFixed(1)}`;
@@ -87,15 +103,20 @@ function LatencyChart({
   const spanHalf = fmtSpan((Math.max(pts.length - 1, 1) * Math.max(intervalSecs, 1)) / 2);
 
   return (
-    <svg className="chart" viewBox={`0 0 ${W} ${H}`} role="img" aria-label={t("stats.history", { n: pts.length })}>
+    <svg
+      className="chart"
+      viewBox={`0 0 ${W} ${H}`}
+      role="img"
+      aria-label={t("stats.history", { n: pts.length })}
+    >
       {/* 横向参考线与 Y 轴数值 */}
       {ticks.map((v, i) => {
-        const gy = y(v);
+        const gy = y(v * 1000);
         return (
           <g key={`t${i}`}>
             <line x1={PAD.l} x2={W - PAD.r} y1={gy} y2={gy} stroke="var(--border)" strokeWidth="1" />
             <text x={PAD.l - 7} y={gy + 3.5} textAnchor="end" className="chart-tick">
-              {fmtTick(v)}
+              {fmtTick(v, step)}
             </text>
           </g>
         );
@@ -110,15 +131,15 @@ function LatencyChart({
           <line
             x1={PAD.l}
             x2={W - PAD.r}
-            y1={y(threshold)}
-            y2={y(threshold)}
+            y1={y(threshold * 1000)}
+            y2={y(threshold * 1000)}
             stroke="var(--warn)"
             strokeDasharray="4 4"
             strokeWidth="1"
             opacity="0.75"
           />
-          <text x={W - PAD.r} y={y(threshold) - 4} textAnchor="end" className="chart-warn">
-            {fmtTick(threshold)}
+          <text x={W - PAD.r} y={y(threshold * 1000) - 4} textAnchor="end" className="chart-warn">
+            {fmtTick(threshold, step)}
           </text>
         </>
       )}
@@ -167,16 +188,21 @@ function LatencyChart({
 /**
  * 详情页的「节点概况」：带宽、传输量、探测成功率、延迟趋势。
  * 数据全部来自后端内存里的采样（5 秒一次本机 rc 查询），不落盘。
+ *
+ * 延迟数字的口径取决于探测方式：轻量=TCP 握手（通常 <1ms，不代表读写延迟），
+ * 完整=列一次目录的耗时，仅进程=没有网络往返，不显示数字。
  */
 export default function StatsPanel({
   stats,
   state,
+  mode,
   threshold,
   intervalSecs,
   t,
 }: {
   stats: Stats | null;
   state: MountState | undefined;
+  mode: ProbeMode;
   threshold: number;
   intervalSecs: number;
   t: T;
@@ -187,6 +213,24 @@ export default function StatsPanel({
   const total = ok + fail;
   const rate = total > 0 ? Math.round((ok / total) * 100) : null;
   const mounted = !!state?.mounted;
+  const tracksLatency = mode !== "process";
+
+  // 「测一次真实延迟」：用户主动点才跑完整探测，只跑一次，不参与定时轮询
+  const [measuring, setMeasuring] = useState(false);
+  const [real, setReal] = useState<{ ok: boolean; text: string } | null>(null);
+
+  async function measureOnce() {
+    if (!state?.id || measuring) return;
+    setMeasuring(true);
+    try {
+      const us = await api.probeNow(state.id);
+      setReal({ ok: true, text: t("stats.realResult", { v: fmtLatency(us) }) });
+    } catch (e) {
+      setReal({ ok: false, text: t("stats.realFail", { e: String(e) }) });
+    } finally {
+      setMeasuring(false);
+    }
+  }
 
   const window = (s?.history ?? []).slice(-WINDOW);
   const good = window.filter((v) => v > 0);
@@ -220,26 +264,54 @@ export default function StatsPanel({
           <small>{t("stats.probes", { ok, fail })}</small>
         </div>
         <div className="stat">
-          <label>{t("stats.latency")}</label>
-          <strong>{s?.latency_ms != null ? `${s.latency_ms} ms` : "—"}</strong>
-          <small>{t("stats.failRate", { v: rate == null ? "—" : 100 - rate })}</small>
+          <label>{tracksLatency ? t("stats.latency") : t("stats.latencyNone")}</label>
+          <strong>{tracksLatency ? fmtLatency(s?.latency_us) : "—"}</strong>
+          <small>
+            {tracksLatency
+              ? `${probeKindLabel(mode, t)} · ${t("stats.failRate", { v: rate == null ? "—" : 100 - rate })}`
+              : t("stats.probeNa")}
+          </small>
         </div>
       </div>
 
       <div className="spark-wrap">
         <div className="spark-head">
-          <span>{t("stats.history", { n: window.length || WINDOW })}</span>
-          <span className="muted small">{t("stats.threshold", { v: threshold })}</span>
+          <span>{t(mode === "light" ? "stats.historyTcp" : "stats.history", { n: window.length || WINDOW })}</span>
+          <div className="spark-tools">
+            {tracksLatency && mode === "full" && (
+              <span className="muted small">{t("stats.threshold", { v: threshold })}</span>
+            )}
+            {tracksLatency && mounted && (
+              <>
+                {real && (
+                  <span className={`small ${real.ok ? "muted" : "bad-text"}`}>{real.text}</span>
+                )}
+                <button
+                  className="btn ghost small"
+                  disabled={measuring}
+                  title={t("stats.measureTip")}
+                  onClick={() => void measureOnce()}
+                >
+                  {measuring ? t("stats.measuring") : t("stats.measureReal")}
+                </button>
+              </>
+            )}
+          </div>
         </div>
-        {window.length >= 2 ? (
+        {tracksLatency && window.length >= 2 ? (
           <>
             <LatencyChart data={window} threshold={threshold} intervalSecs={intervalSecs} t={t} />
             <p className="chart-legend muted small">
-              {t("stats.range", { min: Math.round(min), avg, max: Math.round(max) })}
+              {t("stats.range", {
+                min: fmtLatency(min),
+                avg: fmtLatency(avg),
+                max: fmtLatency(max),
+              })}
             </p>
+            {mode === "light" && <p className="chart-legend muted small">{t("stats.tcpNote")}</p>}
           </>
         ) : (
-          <p className="muted small">{t("stats.noHistory")}</p>
+          <p className="muted small">{tracksLatency ? t("stats.noHistory") : t("stats.probeNa")}</p>
         )}
       </div>
     </section>
