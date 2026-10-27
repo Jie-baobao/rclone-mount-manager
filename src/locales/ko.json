@@ -170,6 +170,7 @@
   "sort.toDefault": "클릭하면 기본 순서로 복원",
   "sort.toDesc": "클릭하면 내림차순 정렬",
   "st.autostart": "시작 시 자동 실행",
+  "st.bundleNote": "관리자를 최신 버전으로 업데이트하면 번들된 rclone과 WinFsp 설치 패키지도 해당 릴리스의 공식 버전으로 자동 업데이트됩니다. rclone은 다음 마운트부터 적용되며, WinFsp는 위 버튼으로 원클릭 설치할 수 있습니다.",
   "st.checkFail": "업데이트 확인 실패: {e}",
   "st.checkUpdates": "업데이트 확인",
   "st.checking": "확인 중…",

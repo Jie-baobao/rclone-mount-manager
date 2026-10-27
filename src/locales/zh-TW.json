@@ -170,6 +170,7 @@
   "sort.toDefault": "點擊恢復預設排序",
   "sort.toDesc": "點擊切換到倒序",
   "st.autostart": "開機自啟動",
+  "st.bundleNote": "升級到最新版管理器時，內建的 rclone 與 WinFsp 安裝套件會自動更新到該版本發布時對應的官方版本：rclone 下次掛載即生效，WinFsp 可在上方一鍵安裝。",
   "st.checkFail": "檢查更新失敗：{e}",
   "st.checkUpdates": "檢查更新",
   "st.checking": "檢查中…",

@@ -170,6 +170,7 @@
   "sort.toDefault": "Klicken, um die Standardreihenfolge wiederherzustellen",
   "sort.toDesc": "Klicken für absteigende Sortierung",
   "st.autostart": "Beim Systemstart starten",
+  "st.bundleNote": "Beim Upgrade auf die neueste Version des Managers werden das integrierte rclone sowie das WinFsp-Installationspaket automatisch auf die zu dieser Veröffentlichung gehörenden offiziellen Versionen aktualisiert: rclone wird beim nächsten Einbinden wirksam, WinFsp lässt sich oben mit einem Klick installieren.",
   "st.checkFail": "Update-Suche fehlgeschlagen: {e}",
   "st.checkUpdates": "Nach Updates suchen",
   "st.checking": "Suche…",

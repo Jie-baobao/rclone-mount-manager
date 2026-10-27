@@ -170,6 +170,7 @@
   "sort.toDefault": "クリックで既定の順序に戻す",
   "sort.toDesc": "クリックで降順に並べ替え",
   "st.autostart": "起動時に自動起動",
+  "st.bundleNote": "マネージャーを最新版に更新すると、同梱の rclone と WinFsp インストーラーもそのリリース時点の公式バージョンへ自動的に更新されます。rclone は次回のマウントから有効になり、WinFsp は上のボタンからワンクリックでインストールできます。",
   "st.checkFail": "更新確認に失敗：{e}",
   "st.checkUpdates": "更新を確認",
   "st.checking": "確認中…",

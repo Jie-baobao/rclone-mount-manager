@@ -170,6 +170,7 @@
   "sort.toDefault": "Click to restore default order",
   "sort.toDesc": "Click to sort descending",
   "st.autostart": "Launch at startup",
+  "st.bundleNote": "Updating the manager to the latest release automatically brings the bundled rclone and WinFsp installer up to the official versions shipped with that release: rclone takes effect on the next mount, and WinFsp can be installed with one click above.",
   "st.checkFail": "Update check failed: {e}",
   "st.checkUpdates": "Check for updates",
   "st.checking": "Checking…",

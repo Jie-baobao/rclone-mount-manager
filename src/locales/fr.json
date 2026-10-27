@@ -170,6 +170,7 @@
   "sort.toDefault": "Cliquer pour rétablir l'ordre par défaut",
   "sort.toDesc": "Cliquer pour trier en ordre décroissant",
   "st.autostart": "Lancer au démarrage",
+  "st.bundleNote": "Lors de la mise à jour du gestionnaire vers la dernière version, rclone et le programme d'installation de WinFsp intégrés passent automatiquement aux versions officielles correspondant à cette version : rclone prend effet au prochain montage et WinFsp peut être installé en un clic ci-dessus.",
   "st.checkFail": "Échec de la recherche de mise à jour : {e}",
   "st.checkUpdates": "Rechercher des mises à jour",
   "st.checking": "Recherche…",
