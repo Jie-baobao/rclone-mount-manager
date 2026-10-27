@@ -40,6 +40,14 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [log, setLog] = useState("");
+  // 挂载日志默认收起（和「节点概况」同一套折叠样式，但默认值相反），状态记在本地
+  const [logOpen, setLogOpen] = useState(() => {
+    try {
+      return localStorage.getItem("rmm.logOpen") === "1";
+    } catch {
+      return false;
+    }
+  });
   const [logFilter, setLogFilter] = useState("");
   const [stats, setStats] = useState<Stats | null>(null);
   const [traffic, setTraffic] = useState<TrafficSummary | null>(null);
@@ -631,18 +639,39 @@ export default function App() {
               t={t}
             />
 
-            <section className="panel grow">
-              <div className="panel-head">
+            <details
+              className="panel details grow"
+              open={logOpen}
+              onToggle={(e) => {
+                const next = e.currentTarget.open;
+                setLogOpen(next);
+                try {
+                  localStorage.setItem("rmm.logOpen", next ? "1" : "0");
+                } catch {
+                  /* 隐私模式下写不了，纯体验问题 */
+                }
+              }}
+            >
+              <summary className="panel-summary">
                 <h3>{t("app.logTitle")}</h3>
                 <div className="panel-tools">
-                  <span className="muted small">{currentState?.mounted ? t("app.logAuto") : t("app.logIdle")}</span>
-                  <button className="btn link" onClick={() => current && loadLog(current.id)}>
+                  <span className="muted small">
+                    {currentState?.mounted ? t("app.logAuto") : t("app.logIdle")}
+                  </span>
+                  {/* preventDefault：不让点「刷新」顺手把面板折叠掉 */}
+                  <button
+                    className="btn link"
+                    onClick={(e) => {
+                      e.preventDefault();
+                      if (current) void loadLog(current.id);
+                    }}
+                  >
                     {t("app.refresh")}
                   </button>
                 </div>
-              </div>
+              </summary>
               <LogView text={log || t("app.logEmpty")} filter={logFilter} onFilter={setLogFilter} t={t} />
-            </section>
+            </details>
           </>
         )}
       </main>

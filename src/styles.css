@@ -379,6 +379,12 @@ body {
   min-height: calc(var(--log-min) + 56px);
 }
 
+/* 日志面板折叠时只是一行标题：不保底、不拉伸 */
+.main.detail details.panel.grow:not([open]) {
+  flex: 0 0 auto;
+  min-height: 0;
+}
+
 .main.detail .log {
   flex: 1 1 auto;
   min-height: var(--log-min);
