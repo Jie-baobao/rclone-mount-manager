@@ -354,6 +354,8 @@ body {
 
 /* 详情页：内容多就整页往下滚（像浏览器那样），不再把日志压成一条缝 */
 .main.detail {
+  /* 日志最小高度：面板保底高度也要按它来算，两边共用同一个值 */
+  --log-min: clamp(240px, 34vh, 480px);
   overflow-y: auto;
   overflow-x: hidden;
   /* 有滚动条时也不让内容左右跳一下 */
@@ -364,15 +366,18 @@ body {
   flex: 0 0 auto;
 }
 
-/* 日志面板：内容不满屏时自动填满剩余高度；内容超屏时由外层滚动，但日志本身保底 240px，
-   不会被上面的面板挤成一条缝 */
+/* 日志面板：内容不满屏时自动填满剩余高度；内容超屏时由外层滚动。
+   关键点：.panel.grow 默认 min-height: 0，在这层滚动容器里会被压到 0 高，
+   里面的日志即使有 min-height 也会被 overflow: hidden 裁掉——所以面板自己也要保底
+   （标题行 + 内边距 + 日志最小高度）。 */
 .main.detail .panel.grow {
   flex: 1 1 auto;
+  min-height: calc(var(--log-min) + 56px);
 }
 
 .main.detail .log {
   flex: 1 1 auto;
-  min-height: clamp(240px, 34vh, 480px);
+  min-height: var(--log-min);
 }
 
 .detail-head {
