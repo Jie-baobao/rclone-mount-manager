@@ -492,16 +492,20 @@ export default function App() {
 
         <div className="sidebar-foot">
           <button className="env-card" onClick={() => setSettingsOpen(true)} title={t("app.settingsTip")}>
-            <span className={env?.fuse_ready && env?.rclone_version ? "env ok" : "env bad"}>
+            <span className={env?.driver.ready && env?.rclone_version ? "env ok" : "env bad"}>
               {env
-                ? env.fuse_ready && env.rclone_version
+                ? env.driver.ready && env.rclone_version
                   ? t("app.envReady")
                   : t("app.envMissing")
                 : t("app.envChecking")}
             </span>
             <span className="env-ver mono">
               {env
-                ? `rclone ${env.rclone_version || "—"} · ${env.fuse_version ? `WinFsp ${env.fuse_version}` : t("app.noDriver")}`
+                ? `rclone ${env.rclone_version || "—"} · ${
+                    env.driver.ready
+                      ? `${env.driver.name}${env.driver.version ? ` ${env.driver.version}` : ""}`
+                      : t("app.noDriver")
+                  }`
                 : ""}
             </span>
           </button>

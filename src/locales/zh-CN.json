@@ -268,7 +268,8 @@
   "st.updateNow": "一键更新",
   "st.updating": "更新中…",
   "st.warnFails": "连续失败 → 黄（次）",
-  "st.winfsp": "WinFsp（挂载驱动）",
+  "st.driverTitle": "{name}（挂载驱动）",
+  "st.driverGuide": "安装说明",
   "stats.failRate": "故障率 {v}%",
   "stats.history": "延迟趋势（最近 {n} 次探测）",
   "stats.historyTcp": "TCP 握手趋势（最近 {n} 次探测）",
@@ -345,5 +346,11 @@
   "st.sectionShell": "资源管理器集成",
   "st.sendto": "在「发送到」菜单里显示已挂载的盘",
   "st.sendtoNote": "开启后，右键文件 → 发送到 会看到已挂载的连接（例如「[工作] NAS-视频 (Z盘)」）。点一下可以选目标文件夹，然后复制或移动过去；目标盘里收到的是真正的文件，不是快捷方式。关掉后菜单项会立刻清除。改完记得点保存。",
-  "sendto.preparing": "正在准备确认窗口…"
+  "sendto.preparing": "正在准备确认窗口…",
+  "st.bundleNoteUnix": "升级到最新版管理器时，只有内置的 rclone 会更新到该版本发布时对应的官方版本（下次挂载即生效）。Linux 的 FUSE 和 macOS 的 macFUSE 由系统或 Homebrew 维护，管理器不会去改动。",
+  "st.depsTipUnix": "rclone 更新会下载官方发布包并解压到应用配置目录，下次挂载自动生效（优先于内置版本）。挂载驱动随系统更新，需要升级时请用发行版自己的包管理器。",
+  "st.driverSystemManaged": "由系统或包管理器维护，这里只显示当前版本",
+  "st.hintWinFsp": "未检测到 WinFsp：点「一键安装」即可（会弹管理员授权）",
+  "st.hintMacFuse": "未检测到 macFUSE / FUSE-T：可安装 macFUSE（brew install --cask macfuse）或 FUSE-T（brew install --cask fuse-t），装完需重启",
+  "st.hintFuse": "未检测到 /dev/fuse：请安装 fuse3（Debian/Ubuntu/deepin: sudo apt install fuse3；Fedora: sudo dnf install fuse3）"
 }

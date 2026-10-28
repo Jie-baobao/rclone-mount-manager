@@ -163,9 +163,15 @@ function reply(cmd: string, args?: Record<string, unknown>): unknown {
         rclone_version: "1.75.2",
         rclone_source: "bundled",
         rclone_bundled: true,
-        fuse_ready: true,
-        fuse_hint: "WinFsp 已就绪",
-        fuse_version: "2.0.23075",
+        // 浏览器预览按 Windows 的样子显示；真机上是后端按平台探测的
+        driver: {
+          name: "WinFsp",
+          version: "2.0.23075",
+          ready: true,
+          hint: "",
+          installable: true,
+          url: "https://winfsp.dev/rel/",
+        },
       } satisfies EnvInfo;
     case "list_connections":
       return list;

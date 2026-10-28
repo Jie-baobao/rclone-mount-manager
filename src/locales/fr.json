@@ -268,7 +268,8 @@
   "st.updateNow": "Mettre à jour",
   "st.updating": "Mise à jour…",
   "st.warnFails": "Échecs consécutifs → jaune",
-  "st.winfsp": "WinFsp (pilote de montage)",
+  "st.driverTitle": "{name} (pilote de montage)",
+  "st.driverGuide": "Guide d’installation",
   "stats.failRate": "Taux d'échec {v} %",
   "stats.history": "Évolution de la latence ({n} derniers tests)",
   "stats.historyTcp": "Évolution de la poignée TCP (dernières {n} sondes)",
@@ -345,5 +346,11 @@
   "st.sectionShell": "Intégration à l'Explorateur",
   "st.sendto": "Afficher les lecteurs montés dans le menu « Envoyer vers »",
   "st.sendtoNote": "Une fois activé, un clic droit sur un fichier → Envoyer vers liste vos connexions montées (ex. « [Travail] NAS-Vidéo (lecteur Z) »). Choisissez un dossier, puis copiez ou déplacez. La destination reçoit de vrais fichiers, jamais de raccourcis. Désactiver cette option supprime immédiatement les entrées du menu. Cliquez sur Enregistrer pour appliquer.",
-  "sendto.preparing": "Préparation de la fenêtre de confirmation…"
+  "sendto.preparing": "Préparation de la fenêtre de confirmation…",
+  "st.bundleNoteUnix": "Lors d’une mise à jour du gestionnaire, seul le rclone intégré est remplacé par la version officielle correspondant à cette release (actif au prochain montage). FUSE sous Linux et macFUSE sous macOS sont gérés par le système ou Homebrew et ne sont pas modifiés.",
+  "st.depsTipUnix": "La mise à jour de rclone télécharge la version officielle et la décompresse dans le dossier de configuration ; elle prend effet au prochain montage (prioritaire sur la version intégrée). Le pilote de montage est mis à jour par le système : utilisez le gestionnaire de paquets de votre distribution.",
+  "st.driverSystemManaged": "Géré par le système ou le gestionnaire de paquets ; version actuelle affichée",
+  "st.hintWinFsp": "WinFsp introuvable — cliquez sur Installer (une demande UAC apparaîtra)",
+  "st.hintMacFuse": "macFUSE / FUSE-T introuvable — installez macFUSE (brew install --cask macfuse) ou FUSE-T (brew install --cask fuse-t), puis redémarrez",
+  "st.hintFuse": "/dev/fuse introuvable — installez fuse3 (Debian/Ubuntu/deepin : sudo apt install fuse3 ; Fedora : sudo dnf install fuse3)"
 }

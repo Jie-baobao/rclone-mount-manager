@@ -2,6 +2,31 @@
 
 每个版本改了什么，按时间倒序列出。安装包在 [Releases](https://github.com/Jie-baobao/rclone-mount-manager/releases) 页面下载。
 
+## v0.3.9 — 未发布
+
+### 新增
+
+- **「发送到」改成独立小窗**：从资源管理器右键发送到挂载盘时，不再把管理器主界面拽到前台，
+  只弹一个 720×680 的确认窗；主界面在托盘里就继续待着。
+- 设置里新增「资源管理器集成」开关（Windows，默认开启）。
+
+### 修正
+
+- **Linux / macOS 上把挂载驱动错写成 WinFsp**：「依赖与更新」里原来固定显示「WinFsp（挂载驱动）」，
+  在 deepin 上明明用的是内核 FUSE，却显示成 Windows 的驱动。现在按平台探测实际驱动：
+  Windows 是 WinFsp（读取注册表里的版本，可一键安装），macOS 是 macFUSE 或 FUSE-T（分别显示版本），
+  Linux 是内核 FUSE + libfuse（显示 `FUSE 3` 和 libfuse 版本，探测顺序：`fusermount3 --version` →
+  `dpkg-query` → `rpm` → `pkg-config`）。侧栏环境行、设置页、诊断报告里的叫法都跟着变。
+- **`FUSE 驱动 · 最新 2.1` 这种无意义对比**：之前非 Windows 也去查 WinFsp 的 GitHub 最新版，
+  拿 WinFsp 的版本号跟空版本号比。现在非 Windows 不再查「最新版」，只显示当前版本，
+  并说明驱动由系统 / 包管理器维护。
+- 「依赖与更新」的说明文字分平台：Windows 讲 WinFsp 安装包与 UAC；macOS / Linux 讲 rclone 会随管理器更新、
+  驱动由系统维护。驱动未就绪时，安装指引能换行完整显示（不再被单行省略号截断）。
+- **开机自启动勾选会自己消失**：设置页每次打开都直接读系统里的真实状态；保存设置不再把勾选抹掉。
+- **Linux 挂载报 `cannot open: /mnt/nas: no such file or directory`**：挂载前自动创建挂载点目录；
+  没权限创建时直接提示 `sudo mkdir -p <挂载点>`。
+- **deepin 托盘左键 / 双击没反应**：Linux 上改用 tray-icon 的 KSNI 后端（libappindicator 后端不发点击事件）。
+
 ## v0.3.8 — 2026-10-27
 
 ### 新增

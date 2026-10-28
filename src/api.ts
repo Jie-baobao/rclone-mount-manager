@@ -184,6 +184,19 @@ export interface DiagResult {
   detail: string;
 }
 
+export interface MountDriver {
+  /** 平台实际的挂载驱动名：WinFsp / macFUSE / FUSE-T / FUSE 3 / FUSE */
+  name: string;
+  /** 驱动版本（Linux 上是 libfuse 版本），探测不到时为空串 */
+  version: string;
+  ready: boolean;
+  /** 未就绪时的安装指引（后端给的，可能只有中文） */
+  hint: string;
+  /** 能否在应用内一键安装（只有 Windows 的 WinFsp 可以） */
+  installable: boolean;
+  url: string;
+}
+
 export interface EnvInfo {
   platform: string;
   app_version: string;
@@ -191,9 +204,7 @@ export interface EnvInfo {
   rclone_version: string;
   rclone_source: string;
   rclone_bundled: boolean;
-  fuse_ready: boolean;
-  fuse_hint: string;
-  fuse_version: string;
+  driver: MountDriver;
 }
 
 export interface VersionInfo {

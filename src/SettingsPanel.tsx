@@ -212,7 +212,7 @@ export default function SettingsPanel({
       `Manager: v${env?.app_version ?? "?"}`,
       `Platform: ${env?.platform ?? "?"}`,
       `rclone: ${env?.rclone_version || "-"} (${env?.rclone_source || "-"}) ${env?.rclone_path || ""}`,
-      `FUSE: ${env?.fuse_ready ? env?.fuse_version || "ready" : "missing"}`,
+      `Driver: ${env ? `${env.driver.name} ${env.driver.version || "-"} (${env.driver.ready ? "ready" : "missing"})` : "-"}`,
       `Settings: lang=${cfg.language} probe=${cfg.probe_interval_secs}s threshold=${cfg.latency_threshold_ms}ms warn=${cfg.warn_fails} error=${cfg.error_fails} log=${cfg.log_max_mb}MB/${cfg.log_retention_days}d sort=${cfg.sort_by}/${cfg.sort_dir}`,
       `Connections: ${conns.length} (mounted ${mountedCount})`,
       ...rows,
@@ -382,7 +382,7 @@ export default function SettingsPanel({
       {/* 依赖与更新 */}
       <h3 className="set-section">{t("st.sectionDeps")}</h3>
       <p className="tips">{t("st.updateNote")}</p>
-      <p className="tips">{t("st.bundleNote")}</p>
+      <p className="tips">{t(win ? "st.bundleNote" : "st.bundleNoteUnix")}</p>
       <div className="ver-list">
         <div className="ver-row">
           <div>
@@ -416,19 +416,38 @@ export default function SettingsPanel({
         </div>
 
         <div className="ver-row">
-          <div>
-            <strong>{t("st.winfsp")}</strong>
-            <div className={env?.fuse_ready ? "muted small mono" : "bad small mono"}>
-              {env?.fuse_ready
-                ? env.fuse_version
-                  ? `v${env.fuse_version}`
+          <div className="ver-main">
+            <strong>{env ? t("st.driverTitle", { name: env.driver.name }) : t("st.driverTitle", { name: "—" })}</strong>
+            <div className={env?.driver.ready ? "muted small mono" : "bad small mono"}>
+              {env?.driver.ready
+                ? env.driver.version
+                  ? `v${env.driver.version}`
                   : t("st.installed")
                 : t("st.notInstalled")}
             </div>
+            {env && !env.driver.ready && (
+              <div className="driver-hint">
+                {env.driver.name === "WinFsp"
+                  ? t("st.hintWinFsp")
+                  : env.platform.startsWith("macos")
+                    ? t("st.hintMacFuse")
+                    : t("st.hintFuse")}
+              </div>
+            )}
           </div>
-          <button className="btn small" disabled={working === "winfsp" || !win} onClick={doInstallWinfsp}>
-            {working === "winfsp" ? t("st.installing") : env?.fuse_ready ? t("st.reinstall") : t("st.install")}
-          </button>
+          {env?.driver.installable ? (
+            <button className="btn small" disabled={working === "winfsp" || !win} onClick={doInstallWinfsp}>
+              {working === "winfsp" ? t("st.installing") : env?.driver.ready ? t("st.reinstall") : t("st.install")}
+            </button>
+          ) : (
+            <button
+              className="btn ghost small"
+              onClick={() => env?.driver.url && api.openUrl(env.driver.url)}
+              title={env?.driver.url}
+            >
+              {t("st.driverGuide")}
+            </button>
+          )}
         </div>
       </div>
 
@@ -436,28 +455,34 @@ export default function SettingsPanel({
         <button className="btn" onClick={check} disabled={checking}>
           {checking ? t("st.checking") : t("st.checkUpdates")}
         </button>
-        {report?.items.map((it) => (
-          <div key={it.name} className="upd-row">
-            <span>
-              {it.name} · {t("st.current")} {it.current || "—"}
-              {it.latest ? ` / ${t("st.newest")} ${it.latest}` : ""}
-              {it.note ? ` (${it.note})` : ""}
-            </span>
-            {it.has_update && it.name === "rclone" && (
-              <button className="btn primary small" disabled={!!working} onClick={() => doInstallRclone(it.latest)}>
-                {working === "rclone" ? t("st.updating") : t("st.updateNow")}
-              </button>
-            )}
-            {it.has_update && it.name !== "rclone" && (
-              <button className="btn ghost small" onClick={() => api.openUrl(it.url)}>
-                {t("st.download")}
-              </button>
-            )}
-            {!it.has_update && it.latest && <span className="muted small">{t("st.latest")}</span>}
-          </div>
-        ))}
+        {report?.items.map((it) => {
+          // 非 Windows 的挂载驱动查不到"最新版"（libfuse / macFUSE 跟着系统走），
+          // 后端不给 note，这里按当前语言补一句，别让用户以为没检测到
+          const note =
+            it.note || (it.name === env?.driver.name && !it.latest ? t("st.driverSystemManaged") : "");
+          return (
+            <div key={it.name} className="upd-row">
+              <span>
+                {it.name} · {t("st.current")} {it.current || "—"}
+                {it.latest ? ` / ${t("st.newest")} ${it.latest}` : ""}
+                {note ? ` (${note})` : ""}
+              </span>
+              {it.has_update && it.name === "rclone" && (
+                <button className="btn primary small" disabled={!!working} onClick={() => doInstallRclone(it.latest)}>
+                  {working === "rclone" ? t("st.updating") : t("st.updateNow")}
+                </button>
+              )}
+              {it.has_update && it.name !== "rclone" && (
+                <button className="btn ghost small" onClick={() => api.openUrl(it.url)}>
+                  {t("st.download")}
+                </button>
+              )}
+              {!it.has_update && it.latest && <span className="muted small">{t("st.latest")}</span>}
+            </div>
+          );
+        })}
       </div>
-      <p className="tips">{t("st.depsTip")}</p>
+      <p className="tips">{t(win ? "st.depsTip" : "st.depsTipUnix")}</p>
 
       {/* 数据 */}
       <h3 className="set-section">{t("st.sectionData")}</h3>

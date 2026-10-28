@@ -1786,3 +1786,14 @@ input::-webkit-credentials-auto-fill-button {
   max-height: none;
   min-height: 108px;
 }
+
+/* 挂载驱动未就绪时的安装指引：可能要写一长串包管理命令，必须能换行、不能截断 */
+.driver-hint {
+  margin-top: 4px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--muted);
+  max-width: 100%;
+  white-space: normal;
+  word-break: break-word;
+}

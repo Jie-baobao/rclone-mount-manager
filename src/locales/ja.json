@@ -268,7 +268,8 @@
   "st.updateNow": "今すぐ更新",
   "st.updating": "更新中…",
   "st.warnFails": "連続失敗 → 黄（回）",
-  "st.winfsp": "WinFsp（マウントドライバ）",
+  "st.driverTitle": "{name}（マウントドライバー）",
+  "st.driverGuide": "インストール方法",
   "stats.failRate": "失敗率 {v}%",
   "stats.history": "遅延の推移（直近 {n} 回）",
   "stats.historyTcp": "TCP ハンドシェイクの推移（直近 {n} 回）",
@@ -345,5 +346,11 @@
   "st.sectionShell": "エクスプローラー連携",
   "st.sendto": "「送る」メニューにマウント中のドライブを表示",
   "st.sendtoNote": "有効にすると、ファイルを右クリック →「送る」にマウント中の接続（例：「[仕事] NAS-動画 (Zドライブ)」）が並びます。保存先フォルダを選んでコピーまたは移動できます。保存先に届くのは実ファイルで、ショートカットは作りません。オフにするとメニュー項目はすぐに消えます。反映するには保存を押してください。",
-  "sendto.preparing": "確認ウィンドウを準備しています…"
+  "sendto.preparing": "確認ウィンドウを準備しています…",
+  "st.bundleNoteUnix": "マネージャーを更新すると、同梱の rclone だけがそのリリース時点の公式版に更新されます（次回マウントで有効）。Linux の FUSE と macOS の macFUSE は OS または Homebrew が管理するため、本アプリは変更しません。",
+  "st.depsTipUnix": "rclone の更新は公式パッケージをダウンロードして設定フォルダーに展開し、次回マウントで有効になります（同梱版より優先）。マウントドライバーは OS が更新するため、お使いのディストリビューションのパッケージマネージャーで更新してください。",
+  "st.driverSystemManaged": "OS またはパッケージマネージャーが管理します。ここには現在のバージョンのみ表示",
+  "st.hintWinFsp": "WinFsp が見つかりません。「インストール」を押してください（UAC の確認が出ます）",
+  "st.hintMacFuse": "macFUSE / FUSE-T が見つかりません。macFUSE（brew install --cask macfuse）または FUSE-T（brew install --cask fuse-t）を入れて再起動してください",
+  "st.hintFuse": "/dev/fuse が見つかりません。fuse3 をインストールしてください（Debian/Ubuntu/deepin: sudo apt install fuse3、Fedora: sudo dnf install fuse3）"
 }

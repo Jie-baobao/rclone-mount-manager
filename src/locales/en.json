@@ -268,7 +268,8 @@
   "st.updateNow": "Update now",
   "st.updating": "Updating…",
   "st.warnFails": "Consecutive failures → yellow",
-  "st.winfsp": "WinFsp (mount driver)",
+  "st.driverTitle": "{name} (mount driver)",
+  "st.driverGuide": "Install guide",
   "stats.failRate": "Failure rate {v}%",
   "stats.history": "Latency trend (last {n} probes)",
   "stats.historyTcp": "TCP handshake trend (last {n} probes)",
@@ -345,5 +346,11 @@
   "st.sectionShell": "File Explorer integration",
   "st.sendto": "Show mounted drives in the “Send to” menu",
   "st.sendtoNote": "When enabled, right-clicking a file → Send to lists your mounted connections (e.g. “[Work] NAS-Video (Z drive)”). Pick a folder, then copy or move. The destination receives real files, never shortcuts. Turning this off removes the menu entries immediately. Click Save to apply.",
-  "sendto.preparing": "Preparing the confirmation window…"
+  "sendto.preparing": "Preparing the confirmation window…",
+  "st.bundleNoteUnix": "When you upgrade the manager, only the bundled rclone is refreshed to the official build matching that release (effective on the next mount). FUSE on Linux and macFUSE on macOS are managed by your system or Homebrew and are left untouched.",
+  "st.depsTipUnix": "Updating rclone downloads the official release and unpacks it into the app config folder; it takes effect on the next mount (ahead of the bundled copy). The mount driver is updated by your OS, so upgrade it with your distribution’s package manager.",
+  "st.driverSystemManaged": "Managed by your system or package manager; current version shown",
+  "st.hintWinFsp": "WinFsp not found — click Install to set it up (a UAC prompt will appear)",
+  "st.hintMacFuse": "macFUSE / FUSE-T not found — install macFUSE (brew install --cask macfuse) or FUSE-T (brew install --cask fuse-t), then reboot",
+  "st.hintFuse": "/dev/fuse not found — install fuse3 (Debian/Ubuntu/deepin: sudo apt install fuse3; Fedora: sudo dnf install fuse3)"
 }

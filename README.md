@@ -139,7 +139,8 @@
 
 - **rclone 内置在安装包里**，不用自己下载、不用配 PATH
 - **WinFsp 驱动**（Windows 挂盘符必需）随包附带，可在「设置 → 依赖与更新」里一键安装 / 升级
-- 「设置 → 依赖与更新」显示管理器、rclone、WinFsp 的当前版本与来源，可一键检查更新
+- 「设置 → 依赖与更新」按平台显示管理器、rclone、挂载驱动（Windows 是 WinFsp，macOS 是 macFUSE / FUSE-T，
+  Linux 是内核 FUSE + libfuse）的当前版本与来源，可一键检查更新
 - rclone 更新会解压到应用配置目录，**优先于内置版本**，升级不需要重装应用
 - **升级 / 重装软件不会动配置目录**：连接、设置、日志都原样保留
 
@@ -205,12 +206,15 @@
 | | Windows | macOS | Linux |
 |---|---|---|---|
 | 界面 / 配置 / 日志 | ✅ | ✅ | ✅ |
-| 挂载驱动 | WinFsp（随包） | macFUSE / FUSE-T | fuse3 |
+| 挂载驱动 | WinFsp（随包附带） | macFUSE / FUSE-T | 内核 FUSE（libfuse3） |
 | 目标形式 | 盘符 `Z:` | 挂载点 | 挂载点 |
 | rclone | 内置 | 内置 | 内置 |
 | 自启动 | ✅ 注册表 | ✅ LaunchAgent | ✅ .desktop |
 | 托盘 | ✅ | ✅ | ✅ |
 | 状态 | 已实测 | 代码就绪，待实机验证 | 代码就绪，待实机验证 |
+
+> Linux 的挂载驱动是内核自带的 FUSE 子系统，不是第三方驱动，基本不用单独装；只要求 `/dev/fuse` 存在
+> （缺的话装 `fuse3` 包）。不同发行版的差别只在 libfuse 的版本和包名，设置页会把实际探测到的名字和版本显示出来。
 
 ## 安装
 
@@ -230,7 +234,7 @@
 |---|---|
 | Windows | 安装包里带了 WinFsp 安装程序。没装过时，打开「设置 → 依赖与更新」点「一键安装」（会弹一次管理员授权） |
 | macOS | `brew install --cask macfuse`（或 `fuse-t`），首次需在「系统设置 → 隐私与安全性」里允许系统扩展 |
-| Linux | `sudo apt install fuse3` / `sudo dnf install fuse3` |
+| Linux | 内核自带 FUSE，通常不用装；缺 `/dev/fuse` 时装 `sudo apt install fuse3` / `sudo dnf install fuse3` |
 
 程序启动时左下角会显示环境自检结果；点它打开设置页，「依赖与更新」里缺什么一眼能看到，也能直接装。
 

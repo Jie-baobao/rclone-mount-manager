@@ -205,19 +205,24 @@ pub fn check(app: &AppHandle) -> UpdateReport {
         note,
     });
 
-    // WinFsp（macOS / Linux 上是 macFUSE / fuse3，官网指向各自项目）
-    let (latest, url, note) = match winfsp_latest() {
-        Ok((v, u)) => (v, u, String::new()),
-        Err(e) => (
-            String::new(),
-            "https://winfsp.dev/rel/".into(),
-            e,
-        ),
+    // 挂载驱动：Windows 的 WinFsp 有独立版本号，能查官方最新版；
+    // macOS 的 macFUSE / Linux 的 libfuse 都跟着系统或 Homebrew/包管理器走，
+    // 拿 WinFsp 的版本号去比是错的（之前 Linux 上就显示「最新 2.1」这种毫无意义的对比）。
+    let driver = &env.driver;
+    let (latest, url, note) = if cfg!(windows) {
+        match winfsp_latest() {
+            Ok((v, u)) => (v, u, String::new()),
+            Err(e) => (String::new(), driver.url.clone(), e),
+        }
+    } else {
+        // 非 Windows 没有"最新版"可查（libfuse / macFUSE 跟着系统走），
+        // 界面按语言自己补一句说明，这里留空避免中英混排
+        (String::new(), driver.url.clone(), String::new())
     };
     items.push(VersionInfo {
-        name: if cfg!(windows) { "WinFsp" } else { "FUSE 驱动" }.into(),
-        current: env.fuse_version.clone(),
-        has_update: !latest.is_empty() && is_newer(&latest, &env.fuse_version),
+        name: driver.name.clone(),
+        current: driver.version.clone(),
+        has_update: !latest.is_empty() && is_newer(&latest, &driver.version),
         latest,
         url,
         note,

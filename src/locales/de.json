@@ -268,7 +268,8 @@
   "st.updateNow": "Jetzt aktualisieren",
   "st.updating": "Aktualisiere…",
   "st.warnFails": "Fehlversuche in Folge → gelb",
-  "st.winfsp": "WinFsp (Einbinde-Treiber)",
+  "st.driverTitle": "{name} (Mount-Treiber)",
+  "st.driverGuide": "Installationshilfe",
   "stats.failRate": "Fehlerquote {v} %",
   "stats.history": "Latenzverlauf (letzte {n} Tests)",
   "stats.historyTcp": "TCP-Handshake-Verlauf (letzte {n} Prüfungen)",
@@ -345,5 +346,11 @@
   "st.sectionShell": "Explorer-Integration",
   "st.sendto": "Gemountete Laufwerke im Menü „Senden an“ anzeigen",
   "st.sendtoNote": "Wenn aktiviert, listet ein Rechtsklick auf eine Datei → Senden an Ihre gemounteten Verbindungen auf (z. B. „[Arbeit] NAS-Video (Laufwerk Z)“). Ordner wählen, dann kopieren oder verschieben. Am Ziel landen echte Dateien, niemals Verknüpfungen. Beim Ausschalten verschwinden die Menüeinträge sofort. Zum Übernehmen auf Speichern klicken.",
-  "sendto.preparing": "Bestätigungsfenster wird vorbereitet…"
+  "sendto.preparing": "Bestätigungsfenster wird vorbereitet…",
+  "st.bundleNoteUnix": "Beim Aktualisieren des Managers wird nur das mitgelieferte rclone auf den offiziellen Build dieser Version gebracht (wirkt beim nächsten Mounten). FUSE unter Linux und macFUSE unter macOS werden vom System bzw. von Homebrew verwaltet und nicht angefasst.",
+  "st.depsTipUnix": "Beim rclone-Update wird die offizielle Version heruntergeladen und in den Konfigurationsordner entpackt; sie wirkt beim nächsten Mounten (vor der mitgelieferten Version). Der Mount-Treiber wird vom System aktualisiert – nutze dafür den Paketmanager deiner Distribution.",
+  "st.driverSystemManaged": "Wird von System oder Paketmanager verwaltet; hier steht die aktuelle Version",
+  "st.hintWinFsp": "WinFsp nicht gefunden – auf „Installieren“ klicken (UAC-Abfrage erscheint)",
+  "st.hintMacFuse": "macFUSE / FUSE-T nicht gefunden – macFUSE (brew install --cask macfuse) oder FUSE-T (brew install --cask fuse-t) installieren, danach neu starten",
+  "st.hintFuse": "/dev/fuse nicht gefunden – fuse3 installieren (Debian/Ubuntu/deepin: sudo apt install fuse3; Fedora: sudo dnf install fuse3)"
 }

@@ -268,7 +268,8 @@
   "st.updateNow": "지금 업데이트",
   "st.updating": "업데이트 중…",
   "st.warnFails": "연속 실패 → 노랑(회)",
-  "st.winfsp": "WinFsp(마운트 드라이버)",
+  "st.driverTitle": "{name}（마운트 드라이버）",
+  "st.driverGuide": "설치 안내",
   "stats.failRate": "실패율 {v}%",
   "stats.history": "지연 추이 (최근 {n}회)",
   "stats.historyTcp": "TCP 핸드셰이크 추이 (최근 {n}회)",
@@ -345,5 +346,11 @@
   "st.sectionShell": "탐색기 통합",
   "st.sendto": "‘보내기’ 메뉴에 마운트된 드라이브 표시",
   "st.sendtoNote": "켜면 파일을 마우스 오른쪽 버튼으로 클릭 → 보내기에 마운트된 연결(예: ‘[업무] NAS-영상 (Z 드라이브)’)이 표시됩니다. 대상 폴더를 고른 뒤 복사하거나 이동하세요. 대상에는 실제 파일만 저장되며 바로 가기는 만들지 않습니다. 끄면 메뉴 항목이 즉시 사라집니다. 적용하려면 저장을 누르세요.",
-  "sendto.preparing": "확인 창을 준비하는 중…"
+  "sendto.preparing": "확인 창을 준비하는 중…",
+  "st.bundleNoteUnix": "관리자를 업데이트하면 내장된 rclone만 해당 릴리스의 공식 버전으로 갱신됩니다(다음 마운트부터 적용). Linux의 FUSE와 macOS의 macFUSE는 운영체제나 Homebrew가 관리하므로 앱이 건드리지 않습니다.",
+  "st.depsTipUnix": "rclone 업데이트는 공식 배포판을 내려받아 설정 폴더에 풀어 두고 다음 마운트부터 적용합니다(내장 버전보다 우선). 마운트 드라이버는 운영체제가 업데이트하므로 배포판의 패키지 관리자로 갱신하세요.",
+  "st.driverSystemManaged": "운영체제나 패키지 관리자가 관리하며 현재 버전만 표시",
+  "st.hintWinFsp": "WinFsp를 찾을 수 없습니다. 설치를 누르세요(UAC 확인 창이 표시됩니다)",
+  "st.hintMacFuse": "macFUSE / FUSE-T를 찾을 수 없습니다. macFUSE(brew install --cask macfuse) 또는 FUSE-T(brew install --cask fuse-t)를 설치한 뒤 재부팅하세요",
+  "st.hintFuse": "/dev/fuse를 찾을 수 없습니다. fuse3를 설치하세요(Debian/Ubuntu/deepin: sudo apt install fuse3, Fedora: sudo dnf install fuse3)"
 }

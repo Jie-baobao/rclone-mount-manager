@@ -4,6 +4,26 @@ use std::net::{TcpStream, ToSocketAddrs};
 use std::time::Duration;
 use tauri::AppHandle;
 
+/// 平台挂载驱动。三个系统跑的根本不是同一个东西：
+///   Windows → WinFsp（独立的内核驱动，要单独安装）
+///   macOS   → macFUSE（内核扩展）或 FUSE-T（NFS 实现，不需要内核扩展）
+///   Linux   → 内核自带的 FUSE 子系统 + libfuse（/dev/fuse），发行版一般已带
+/// 所以界面上不能写死「WinFsp」，得按实际平台显示。
+#[derive(serde::Serialize, Clone, Debug)]
+pub struct MountDriver {
+    /// 界面直接显示的名字：WinFsp / macFUSE / FUSE-T / FUSE 3 / FUSE
+    pub name: String,
+    /// 驱动版本（Linux 上是 libfuse 的版本），探测不到时为空
+    pub version: String,
+    pub ready: bool,
+    /// 未就绪时的安装指引；就绪时为空
+    pub hint: String,
+    /// 能否在应用内一键安装（目前只有 Windows 的 WinFsp 具备）
+    pub installable: bool,
+    /// 官网 / 安装说明
+    pub url: String,
+}
+
 /// 依赖环境自检结果，UI 启动时展示
 #[derive(serde::Serialize, Clone, Debug)]
 pub struct EnvInfo {
@@ -16,10 +36,8 @@ pub struct EnvInfo {
     pub rclone_source: String,
     /// 是否用的是安装包内置的 rclone
     pub rclone_bundled: bool,
-    pub fuse_ready: bool,
-    pub fuse_hint: String,
-    /// 挂载驱动版本（Windows 上为 WinFsp 版本）
-    pub fuse_version: String,
+    /// 当前平台实际的挂载驱动
+    pub driver: MountDriver,
 }
 
 pub fn env_info(app: &AppHandle) -> EnvInfo {
@@ -34,9 +52,6 @@ pub fn env_info(app: &AppHandle) -> EnvInfo {
         None => (String::new(), String::new(), String::new()),
     };
 
-    let (fuse_ready, fuse_hint) = check_fuse();
-    let fuse_version = fuse_version();
-
     EnvInfo {
         platform,
         app_version: env!("CARGO_PKG_VERSION").to_string(),
@@ -44,92 +59,248 @@ pub fn env_info(app: &AppHandle) -> EnvInfo {
         rclone_version,
         rclone_bundled: rclone_source == "bundled",
         rclone_source,
-        fuse_ready,
-        fuse_hint,
-        fuse_version,
+        driver: mount_driver(),
     }
 }
 
-/// 挂载驱动版本：Windows 读 WinFsp 的卸载项，macOS / Linux 尽力而为
-fn fuse_version() -> String {
+/// 按平台探测挂载驱动（名字、版本、是否就绪、怎么装）
+pub fn mount_driver() -> MountDriver {
     #[cfg(windows)]
     {
-        use winreg::enums::{HKEY_LOCAL_MACHINE, KEY_READ};
-        use winreg::RegKey;
-
-        let roots = [
-            r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
-            r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall",
-        ];
-        for root in roots {
-            let Ok(key) = RegKey::predef(HKEY_LOCAL_MACHINE).open_subkey_with_flags(root, KEY_READ) else {
-                continue;
-            };
-            for sub in key.enum_keys().flatten() {
-                let Ok(item) = key.open_subkey_with_flags(&sub, KEY_READ) else {
-                    continue;
-                };
-                let name: String = item.get_value("DisplayName").unwrap_or_default();
-                if name.to_lowercase().contains("winfsp") {
-                    let ver: String = item.get_value("DisplayVersion").unwrap_or_default();
-                    if !ver.is_empty() {
-                        return ver;
-                    }
-                }
-            }
-        }
-        String::new()
-    }
-    #[cfg(not(windows))]
-    {
-        String::new()
-    }
-}
-
-/// 检查平台挂载驱动是否就位
-fn check_fuse() -> (bool, String) {
-    #[cfg(windows)]
-    {
-        let svc = std::process::Command::new("sc")
-            .args(["query", "WinFsp.Launcher"])
-            .output();
+        let version = winfsp_version();
         let driver_dir = std::path::Path::new(r"C:\Program Files (x86)\WinFsp\bin");
-        let ok = svc.map(|o| String::from_utf8_lossy(&o.stdout).contains("RUNNING")).unwrap_or(false)
-            || driver_dir.exists();
-        (
-            ok,
-            if ok {
-                "WinFsp 已就绪".into()
+        let svc_running = std::process::Command::new("sc")
+            .args(["query", "WinFsp.Launcher"])
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).contains("RUNNING"))
+            .unwrap_or(false);
+        let ready = svc_running || driver_dir.exists();
+        MountDriver {
+            name: "WinFsp".into(),
+            version,
+            ready,
+            hint: if ready {
+                String::new()
             } else {
-                "未检测到 WinFsp，请先安装 https://winfsp.dev".into()
+                "未检测到 WinFsp：点「一键安装」即可（会弹管理员授权）".into()
             },
-        )
+            installable: true,
+            url: "https://winfsp.dev/rel/".into(),
+        }
     }
     #[cfg(target_os = "macos")]
     {
-        let ok = std::path::Path::new("/usr/local/lib/libfuse-t.dylib").exists()
-            || std::path::Path::new("/Library/Filesystems/macfuse.fs").exists();
-        (
-            ok,
-            if ok {
-                "FUSE 已就绪".into()
-            } else {
-                "请先安装 macFUSE 或 FUSE-T（brew install --cask macfuse）".into()
-            },
-        )
+        mac_driver()
     }
     #[cfg(all(unix, not(target_os = "macos")))]
     {
-        let ok = std::path::Path::new("/dev/fuse").exists();
-        (
-            ok,
-            if ok {
-                "fuse3 已就绪".into()
-            } else {
-                "请先安装 fuse3（apt install fuse3 / dnf install fuse3）".into()
-            },
-        )
+        linux_driver()
     }
+}
+
+// ---------------------------------------------------------------- Windows
+
+/// WinFsp 版本：读卸载项里的 DisplayVersion
+#[cfg(windows)]
+fn winfsp_version() -> String {
+    use winreg::enums::{HKEY_LOCAL_MACHINE, KEY_READ};
+    use winreg::RegKey;
+
+    let roots = [
+        r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
+        r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall",
+    ];
+    for root in roots {
+        let Ok(key) = RegKey::predef(HKEY_LOCAL_MACHINE).open_subkey_with_flags(root, KEY_READ) else {
+            continue;
+        };
+        for sub in key.enum_keys().flatten() {
+            let Ok(item) = key.open_subkey_with_flags(&sub, KEY_READ) else {
+                continue;
+            };
+            let name: String = item.get_value("DisplayName").unwrap_or_default();
+            if name.to_lowercase().contains("winfsp") {
+                let ver: String = item.get_value("DisplayVersion").unwrap_or_default();
+                if !ver.is_empty() {
+                    return ver;
+                }
+            }
+        }
+    }
+    String::new()
+}
+
+// ---------------------------------------------------------------- macOS
+
+/// macOS：macFUSE（内核扩展）与 FUSE-T（NFS 实现）二选一，rclone 两个都认
+#[cfg(target_os = "macos")]
+fn mac_driver() -> MountDriver {
+    if std::path::Path::new("/Library/Filesystems/macfuse.fs").exists() {
+        let version = command_output(
+            "defaults",
+            &[
+                "read",
+                "/Library/Filesystems/macfuse.fs/Contents/Info",
+                "CFBundleShortVersionString",
+            ],
+        )
+        .and_then(|s| first_version_token(&s))
+        .unwrap_or_default();
+        return MountDriver {
+            name: "macFUSE".into(),
+            version,
+            ready: true,
+            hint: String::new(),
+            installable: false,
+            url: "https://macfuse.io/".into(),
+        };
+    }
+
+    if std::path::Path::new("/usr/local/lib/libfuse-t.dylib").exists() {
+        let version = ["/opt/homebrew/Cellar/fuse-t", "/usr/local/Cellar/fuse-t"]
+            .iter()
+            .filter_map(|p| newest_dir_version(p))
+            .max_by(|a, b| cmp_version(a, b))
+            .unwrap_or_default();
+        return MountDriver {
+            name: "FUSE-T".into(),
+            version,
+            ready: true,
+            hint: String::new(),
+            installable: false,
+            url: "https://www.fuse-t.org/".into(),
+        };
+    }
+
+    MountDriver {
+        name: "macFUSE".into(),
+        version: String::new(),
+        ready: false,
+        hint: "未检测到 macFUSE / FUSE-T：可安装 macFUSE（brew install --cask macfuse）或 FUSE-T（brew install --cask fuse-t），装完需重启".into(),
+        installable: false,
+        url: "https://macfuse.io/".into(),
+    }
+}
+
+/// 取目录下形如 1.2.3 的子目录名里最新的那个（Homebrew Cellar 布局）
+#[cfg(target_os = "macos")]
+#[allow(dead_code)]
+fn newest_dir_version(dir: &str) -> Option<String> {
+    let entries = std::fs::read_dir(dir).ok()?;
+    let mut versions: Vec<String> = entries
+        .flatten()
+        .filter_map(|e| e.file_name().to_str().map(|s| s.to_string()))
+        .filter(|name| name.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false))
+        .collect();
+    versions.sort_by(|a, b| cmp_version(a, b));
+    versions.pop()
+}
+
+// ---------------------------------------------------------------- Linux
+
+/// Linux：驱动就是内核自带的 FUSE 子系统，能不能挂载看 /dev/fuse 在不在；
+/// 版本取的是 libfuse（rclone 链接的动态库），各家发行版包名和查询方式都不一样。
+#[cfg(all(unix, not(target_os = "macos")))]
+fn linux_driver() -> MountDriver {
+    let ready = std::path::Path::new("/dev/fuse").exists();
+    let version = linux_libfuse_version();
+    let name = if version.starts_with("2.") {
+        "FUSE 2".to_string()
+    } else if version.starts_with("3.") {
+        "FUSE 3".to_string()
+    } else {
+        "FUSE".to_string()
+    };
+
+    MountDriver {
+        name,
+        version,
+        ready,
+        hint: if ready {
+            String::new()
+        } else {
+            "未检测到 /dev/fuse：请安装 fuse3（Debian/Ubuntu/deepin: sudo apt install fuse3；Fedora: sudo dnf install fuse3），容器/虚拟机里还要放开 FUSE 设备".into()
+        },
+        installable: false,
+        url: "https://github.com/libfuse/libfuse".into(),
+    }
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn linux_libfuse_version() -> String {
+    // 1) fusermount3 自带版本号，最省事（Debian 系、Arch 都有）
+    if let Some(v) = command_output("fusermount3", &["--version"]).and_then(|s| first_version_token(&s)) {
+        return v;
+    }
+    // 2) Debian / Ubuntu / deepin
+    if let Some(v) = command_output("dpkg-query", &["-W", "-f=${Version}", "libfuse3-3"])
+        .and_then(|s| first_version_token(&s))
+    {
+        return v;
+    }
+    // 3) Fedora / RHEL / openSUSE
+    if let Some(v) = command_output("rpm", &["-q", "--qf", "%{VERSION}", "fuse3-libs"])
+        .and_then(|s| first_version_token(&s))
+    {
+        return v;
+    }
+    // 4) 装了开发包 / 源码编译的
+    if let Some(v) = command_output("pkg-config", &["--modversion", "fuse3"])
+        .and_then(|s| first_version_token(&s))
+    {
+        return v;
+    }
+    // 5) 只有 libfuse2 的老系统
+    if let Some(v) = command_output("fusermount", &["--version"]).and_then(|s| first_version_token(&s)) {
+        return v;
+    }
+    String::new()
+}
+
+// ---------------------------------------------------------------- 小工具
+
+#[allow(dead_code)] // Windows 上走注册表，用不到这三个函数
+fn command_output(prog: &str, args: &[&str]) -> Option<String> {
+    let out = std::process::Command::new(prog).args(args).output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if text.is_empty() {
+        None
+    } else {
+        Some(text)
+    }
+}
+
+/// 从「fusermount3 version: 3.14.0」「3.14.0-4」这类文本里抠出版本号
+#[allow(dead_code)]
+fn first_version_token(text: &str) -> Option<String> {
+    for token in text.split_whitespace() {
+        let trimmed = token.trim_matches(|c: char| c == 'v' || c == 'V');
+        let mut parts = trimmed.split('.');
+        let (Some(major), Some(minor)) = (parts.next(), parts.next()) else {
+            continue;
+        };
+        if !major.is_empty()
+            && major.chars().all(|c| c.is_ascii_digit())
+            && minor.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false)
+        {
+            // 去掉 Debian 的 "-4" 后缀：3.14.0-4 → 3.14.0
+            let clean: String = trimmed
+                .chars()
+                .take_while(|c| c.is_ascii_digit() || *c == '.')
+                .collect();
+            return Some(clean.trim_end_matches('.').to_string());
+        }
+    }
+    None
+}
+
+#[allow(dead_code)]
+fn cmp_version(a: &str, b: &str) -> std::cmp::Ordering {
+    let parse = |s: &str| -> Vec<u64> { s.split('.').map(|p| p.parse::<u64>().unwrap_or(0)).collect() };
+    parse(a).cmp(&parse(b))
 }
 
 /// 连接测试：
