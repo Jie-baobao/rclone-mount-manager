@@ -274,7 +274,7 @@ fn to_connection(input: &ConnectionInput, existing: Option<&Connection>) -> Conn
         port,
         path: input.path.trim().trim_matches('/').to_string(),
         user: input.user.trim().to_string(),
-        target: input.target.trim().to_string(),
+        target: normalize_target(&input.target),
         cache_dir: input.cache_dir.trim().to_string(),
         ignore_cert: input.ignore_cert,
         s3_provider: if input.s3_provider.trim().is_empty() {
@@ -311,6 +311,122 @@ fn free_port() -> u16 {
         .unwrap_or(0)
 }
 
+/// 用户家目录。unix 一律看 HOME：Tauri 进程由桌面会话拉起，这个变量总是有的。
+#[cfg(unix)]
+fn home_dir() -> Option<std::path::PathBuf> {
+    std::env::var_os("HOME").map(std::path::PathBuf::from)
+}
+
+/// 新建连接时的默认挂载目标。Windows 给一个固定盘符；unix 放家目录下，
+/// 因为 `/mnt` 属于 root，普通用户建不了目录，一挂就报权限错误（deepin 上实测）。
+#[tauri::command]
+fn default_mount_target() -> String {
+    #[cfg(windows)]
+    {
+        "Z:".to_string()
+    }
+    #[cfg(unix)]
+    {
+        match home_dir() {
+            Some(h) => h.join("mnt").join("nas").to_string_lossy().to_string(),
+            None => "/mnt/nas".to_string(),
+        }
+    }
+}
+
+/// 确保 unix 的挂载点目录存在。FUSE 要求挂载点先建好，缺了 rclone 直接
+/// `cannot open: /mnt/nas: No such file or directory`。
+/// 家目录这种位置普通权限就能建；`/mnt` 之类的要 root，Linux 上顺手走一次
+/// pkexec（polkit 弹系统授权窗），省得用户自己开终端敲 sudo。macOS 没有 pkexec，
+/// 建不出来就把补救命令写进错误里。
+#[cfg(unix)]
+fn ensure_mount_point(target: &str) -> Result<(), String> {
+    let t = target.trim();
+    if t.is_empty() {
+        return Ok(());
+    }
+    let p = std::path::Path::new(t);
+    if p.is_dir() {
+        return Ok(());
+    }
+    if p.exists() {
+        return Err(format!("挂载点 {t} 已存在，但不是目录。换一个位置再试。"));
+    }
+    if std::fs::create_dir_all(p).is_ok() {
+        return Ok(());
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        // sh -c 里一次做完「建目录 + 把属主改回当前用户」：只弹一次授权，
+        // 而且挂载点归自己以后 fusermount 挂载、卸载都不会再卡权限。
+        // PKEXEC_UID 由 pkexec 自己注入，$1 是下面用 "sh" 占位后传进来的路径。
+        let script = "mkdir -p \"$1\" && chown \"$PKEXEC_UID:$PKEXEC_UID\" \"$1\"";
+        if let Ok(mut child) = std::process::Command::new("pkexec")
+            .arg("sh")
+            .arg("-c")
+            .arg(script)
+            .arg("sh")
+            .arg(t)
+            .spawn()
+        {
+            // 用户在授权窗里输密码可能慢，给两分钟；超时就杀掉，避免挂载一直转圈
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+            loop {
+                match child.try_wait() {
+                    Ok(Some(st)) if st.success() && p.is_dir() => return Ok(()),
+                    Ok(Some(_)) => break,
+                    Ok(None) if std::time::Instant::now() < deadline => {
+                        std::thread::sleep(std::time::Duration::from_millis(200));
+                    }
+                    Ok(None) => {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        break;
+                    }
+                    Err(_) => break,
+                }
+            }
+        }
+    }
+
+    let alt = home_dir()
+        .map(|h| {
+            format!(
+                "，或者把「目标位置」改到家目录下（例如 {}/mnt/nas），那里不需要管理员权限",
+                h.display()
+            )
+        })
+        .unwrap_or_default();
+    Err(format!(
+        "挂载点 {t} 不存在，自动创建被系统拒绝（需要管理员权限）。请在终端执行 `sudo mkdir -p {t}` 后重试{alt}。"
+    ))
+}
+
+/// 挂载目标归一化：`~` 展开成家目录（rclone 不认 `~`，会当相对路径处理），
+/// 其余平台去掉首尾空白。
+fn normalize_target(raw: &str) -> String {
+    #[cfg(unix)]
+    {
+        let p = raw.trim();
+        if p == "~" {
+            return home_dir()
+                .map(|h| h.to_string_lossy().to_string())
+                .unwrap_or_else(|| p.to_string());
+        }
+        if let Some(rest) = p.strip_prefix("~/") {
+            if let Some(h) = home_dir() {
+                return h.join(rest).to_string_lossy().to_string();
+            }
+        }
+        p.to_string()
+    }
+    #[cfg(windows)]
+    {
+        raw.trim().to_string()
+    }
+}
+
 /// 启动挂载并把会话登记进状态表
 fn start_session(app: &AppHandle, state: &AppState, conn: &Connection, restarts: u32) -> Result<u32, String> {
     let log_path = store::mount_log_path(app, &conn.id)?;
@@ -321,18 +437,9 @@ fn start_session(app: &AppHandle, state: &AppState, conn: &Connection, restarts:
 
     // Unix 的 FUSE 挂载要求挂载点目录已经存在（Windows 盘符由系统管，不需要），
     // 缺了 rclone 会直接 CRITICAL: cannot open: /mnt/nas: no such file or directory。
-    // 这里尽力帮用户补一个；补不出来（/mnt 这类位置多半要 root）就把补救命令写进错误里。
+    // 这里尽力帮用户补一个，需要提权时走 pkexec；真补不出来就把补救方法写进错误里。
     #[cfg(unix)]
-    {
-        if !conn.target.is_empty() && !std::path::Path::new(&conn.target).exists() {
-            std::fs::create_dir_all(&conn.target).map_err(|e| {
-                format!(
-                    "挂载点 {} 不存在，且自动创建失败（{e}）。请在终端执行 `sudo mkdir -p {}` 后重试。",
-                    conn.target, conn.target
-                )
-            })?;
-        }
-    }
+    ensure_mount_point(&conn.target)?;
 
     let rc_port = free_port();
     let child = rclone::spawn_mount(app, conn, &log_path, rc_port)?;
@@ -1629,6 +1736,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             get_env,
+            default_mount_target,
             list_connections,
             save_connection,
             set_pinned,

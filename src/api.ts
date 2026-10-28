@@ -275,6 +275,8 @@ export interface SendReport {
 
 export const api = {
   env: () => call<EnvInfo>("get_env"),
+  /** 新建连接时的默认挂载目标：Windows 是盘符，unix 是家目录下的路径（不需要管理员权限） */
+  defaultMountTarget: () => call<string>("default_mount_target"),
   list: () => call<Connection[]>("list_connections"),
   save: (input: ConnectionInput) => call<Connection>("save_connection", { input }),
   remove: (id: string) => call<void>("delete_connection", { id }),

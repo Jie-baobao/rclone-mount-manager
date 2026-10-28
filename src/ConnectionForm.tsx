@@ -36,7 +36,7 @@ export default function ConnectionForm({ initial, env, t, onClose, onSaved }: Pr
   const [user, setUser] = useState(initial?.user ?? "");
   const [password, setPassword] = useState("");
   const [showPass, setShowPass] = useState(false);
-  const [target, setTarget] = useState(initial?.target ?? (win ? "Z:" : "/mnt/nas"));
+  const [target, setTarget] = useState(initial?.target ?? (win ? "Z:" : ""));
   const [cacheDir, setCacheDir] = useState(initial?.cache_dir ?? "");
 
   const [ignoreCert, setIgnoreCert] = useState(initial?.ignore_cert ?? false);
@@ -68,6 +68,23 @@ export default function ConnectionForm({ initial, env, t, onClose, onSaved }: Pr
 
   const meta = PROTOCOL_META[protocol];
   const isS3 = protocol === "s3";
+
+  // 新建连接时挂载点默认放家目录：/mnt 属于 root，普通用户建不了目录，
+  // 挂载时会直接报「权限不够（os error 13）」。编辑已有连接不动它的设置。
+  useEffect(() => {
+    if (editing || win) return;
+    let alive = true;
+    api
+      .defaultMountTarget()
+      .then((p) => {
+        if (alive) setTarget((cur) => (cur.trim() ? cur : p));
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const payload = useMemo<ConnectionInput>(
     () => ({
@@ -327,6 +344,8 @@ export default function ConnectionForm({ initial, env, t, onClose, onSaved }: Pr
       {isS3 && <p className="tips">{t("cf.s3Tip")}</p>}
 
       {targetWarn && <p className="tips bad-text">⚠ {targetWarn}</p>}
+
+      {!win && /^\/mnt(\/|$)/.test(target.trim()) && <p className="tips">{t("cf.rootTargetTip")}</p>}
 
       {protocol === "webdav" && <p className="tips">{t("cf.davTip")}</p>}
 

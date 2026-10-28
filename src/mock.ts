@@ -155,6 +155,8 @@ let list = [...conns];
 
 function reply(cmd: string, args?: Record<string, unknown>): unknown {
   switch (cmd) {
+    case "default_mount_target":
+      return "Z:";
     case "get_env":
       return {
         platform: "windows x86_64",
