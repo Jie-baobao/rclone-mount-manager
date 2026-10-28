@@ -222,8 +222,6 @@ export interface Settings {
   sort_by: string;
   /** asc / desc */
   sort_dir: string;
-  /** 仅前端状态：镜像注册表/启动项里的自启动开关（后端 Settings 不含此字段） */
-  autostart?: boolean;
   /** 在资源管理器「发送到」菜单里为已挂载的连接生成入口（Windows，默认开） */
   sendto_enabled: boolean;
 }

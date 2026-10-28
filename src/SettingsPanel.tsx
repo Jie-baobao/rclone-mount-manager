@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Modal from "./Modal";
 import {
   api,
@@ -68,6 +68,21 @@ export default function SettingsPanel({
   const [impPending, setImpPending] = useState<string | null>(null);
   const [impPass, setImpPass] = useState("");
   const [diagCopied, setDiagCopied] = useState(false);
+  /**
+   * 开机自启动的真实状态自己拉，不走 cfg。
+   *
+   * 原因：Settings（后端）没有 autostart 字段，它只活在 App 启动时拉的快照里——
+   * 既不会跟着勾选动作更新，也会在保存后 setCfg(saved) 时被抹掉，
+   * 表现为「勾上了、保存成功、勾选又消失」。直接读系统真实状态最可靠。
+   */
+  const [autostart, setAutostartState] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    api
+      .getAutostart()
+      .then(setAutostartState)
+      .catch(() => setAutostartState(false));
+  }, []);
 
   const win = isWindows(env);
   const set = <K extends keyof Settings>(key: K, value: Settings[K]) =>
@@ -293,17 +308,17 @@ export default function SettingsPanel({
         <label className="check">
           <input
             type="checkbox"
-            checked={cfg.autostart ?? false}
+            checked={autostart ?? false}
             onChange={async (e) => {
               // 必须在 await 之前取值：这个复选框是受控组件，await 期间 React 会把 DOM 的
               // checked 刷回 false，等 setAutostart 返回后再读就永远是 false（表现为“勾不上”）。
               const next = e.target.checked;
-              setCfg((c) => ({ ...c, autostart: next }));
+              setAutostartState(next);
               try {
                 await api.setAutostart(next);
                 notify("ok", next ? t("toast.autostartOn") : t("toast.autostartOff"));
               } catch (err) {
-                setCfg((c) => ({ ...c, autostart: !next }));
+                setAutostartState(!next);
                 notify("bad", String(err));
               }
             }}

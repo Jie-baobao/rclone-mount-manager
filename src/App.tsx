@@ -93,12 +93,12 @@ export default function App() {
     }
   }, [notify]);
 
-  // 初次加载：设置（含开机自启动开关）+ 环境 + 连接
+  // 初次加载：设置 + 环境 + 连接
+  // 开机自启动不在里面：它的真实状态由设置面板自己拉（Settings 后端没有这个字段，
+  // 混进这份快照会出现「勾了又消失」的假象）。
   useEffect(() => {
     refreshEnv();
-    Promise.all([api.getSettings(), api.getAutostart().catch(() => false)])
-      .then(([s, autostart]) => setSettings({ ...s, autostart }))
-      .catch(() => setSettings(null));
+    api.getSettings().then(setSettings).catch(() => setSettings(null));
     refresh();
     // 注意：这里不再主动取「发送到」请求。请求的归属是那个独立小窗，
     // 主窗口也去取就会在小窗打开前把请求抢走，变成主界面弹框。

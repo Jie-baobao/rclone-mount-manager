@@ -318,6 +318,22 @@ fn start_session(app: &AppHandle, state: &AppState, conn: &Connection, restarts:
     // 每次启动都按连接信息重写一遍 remote：老版本写坏的配置（例如把 WebDAV 地址拼成
     // http://5005//192.168.50.4）不用用户重新编辑连接就能自愈。密码沿用已有值。
     let _ = rclone::upsert_remote(app, conn, None);
+
+    // Unix 的 FUSE 挂载要求挂载点目录已经存在（Windows 盘符由系统管，不需要），
+    // 缺了 rclone 会直接 CRITICAL: cannot open: /mnt/nas: no such file or directory。
+    // 这里尽力帮用户补一个；补不出来（/mnt 这类位置多半要 root）就把补救命令写进错误里。
+    #[cfg(unix)]
+    {
+        if !conn.target.is_empty() && !std::path::Path::new(&conn.target).exists() {
+            std::fs::create_dir_all(&conn.target).map_err(|e| {
+                format!(
+                    "挂载点 {} 不存在，且自动创建失败（{e}）。请在终端执行 `sudo mkdir -p {}` 后重试。",
+                    conn.target, conn.target
+                )
+            })?;
+        }
+    }
+
     let rc_port = free_port();
     let child = rclone::spawn_mount(app, conn, &log_path, rc_port)?;
     let pid = child.id();
