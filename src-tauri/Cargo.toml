@@ -36,6 +36,14 @@ rand = "0.8"
 [target.'cfg(windows)'.dependencies]
 winreg = "0.52"
 
+# Linux 托盘换用 KSNI 后端：libappindicator 后端不发出图标点击事件（库层面缺陷，
+# tray-icon 文档标注 "Linux: Unsupported"），deepin 上左键/双击托盘图标完全没反应。
+# KSNI 直接实现 StatusNotifierItem，左键 Activate 会正常转成 TrayIconEvent::Click，
+# 我们现有的 on_tray_icon_event 就能工作。feature 是叠加的：tauri 那份依赖仍带
+# libappindicator，但 tray-icon 在两个后端都启用时优先编译 ksni（cfg(feature="ksni")）。
+[target.'cfg(target_os = "linux")'.dependencies]
+tray-icon = { version = "0.25", default-features = false, features = ["serde", "ksni"] }
+
 [profile.release]
 codegen-units = 1
 lto = true
