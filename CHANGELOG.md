@@ -2,17 +2,6 @@
 
 每个版本改了什么，按时间倒序列出。安装包在 [Releases](https://github.com/Jie-baobao/rclone-mount-manager/releases) 页面下载。
 
-## v0.3.10 — 未发布
-
-### 修正
-
-- **deepin / Linux 上新建连接默认挂载点就报权限错误**：默认值原来是 `/mnt/nas`，而 `/mnt` 属于 root，
-  普通用户建不了目录，一点挂载就弹「挂载点不存在，且自动创建失败（权限不够（os error 13））」。
-  现在新建连接的默认挂载点是家目录下的 `~/mnt/nas`（保存时把 `~` 展开成绝对路径），不需要任何授权。
-- 仍然选择 `/mnt/...` 这类系统位置时，挂载会先走 `pkexec` 弹一次系统授权窗把目录建好、
-  并把属主改回当前用户（只弹一次，两分钟没操作自动取消）；表单里也会提前提示这一点，
-  并建议改用家目录路径。授权被拒绝时才显示原来那条 `sudo mkdir -p` 的提示。
-
 ## v0.3.9 — 2026-10-28
 
 ### 新增
@@ -23,6 +12,12 @@
 
 ### 修正
 
+- **deepin / Linux 上新建连接默认挂载点就报权限错误**：默认值原来是 `/mnt/nas`，而 `/mnt` 属于 root，
+  普通用户建不了目录，一点挂载就弹「挂载点不存在，且自动创建失败（权限不够（os error 13））」。
+  现在新建连接的默认挂载点是家目录下的 `~/mnt/nas`（保存时把 `~` 展开成绝对路径），不需要任何授权。
+- 仍然选择 `/mnt/...` 这类系统位置时，挂载会先走 `pkexec` 弹一次系统授权窗把目录建好、
+  并把属主改回当前用户（只弹一次，两分钟没操作自动取消）；表单里也会提前提示这一点，
+  并建议改用家目录路径。授权被拒绝时才显示原来那条 `sudo mkdir -p` 的提示。
 - **Linux / macOS 上把挂载驱动错写成 WinFsp**：「依赖与更新」里原来固定显示「WinFsp（挂载驱动）」，
   在 deepin 上明明用的是内核 FUSE，却显示成 Windows 的驱动。现在按平台探测实际驱动：
   Windows 是 WinFsp（读取注册表里的版本，可一键安装），macOS 是 macFUSE 或 FUSE-T（分别显示版本），
@@ -34,8 +29,6 @@
 - 「依赖与更新」的说明文字分平台：Windows 讲 WinFsp 安装包与 UAC；macOS / Linux 讲 rclone 会随管理器更新、
   驱动由系统维护。驱动未就绪时，安装指引能换行完整显示（不再被单行省略号截断）。
 - **开机自启动勾选会自己消失**：设置页每次打开都直接读系统里的真实状态；保存设置不再把勾选抹掉。
-- **Linux 挂载报 `cannot open: /mnt/nas: no such file or directory`**：挂载前自动创建挂载点目录；
-  没权限创建时直接提示 `sudo mkdir -p <挂载点>`。
 - **deepin 托盘左键 / 双击没反应**：Linux 上改用 tray-icon 的 KSNI 后端（libappindicator 后端不发点击事件）。
 - **README 开头的依赖描述不严谨**：原来笼统写成「基于 rclone 与平台原生 FUSE 驱动」，把 Windows 漏掉了。
   现在按平台说明：Windows 用 WinFsp，macOS 用 macFUSE / FUSE-T，Linux 用内核 FUSE（libfuse），
