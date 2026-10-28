@@ -1,10 +1,10 @@
 # Rclone Mount Manager
 
-把 NAS / 网络存储 / 对象存储挂成本地盘符的跨平台桌面工具，基于 [rclone](https://rclone.org) 与平台原生 FUSE 驱动。
+把 NAS / 网络存储 / 对象存储挂成本地盘符的跨平台桌面工具，基于 [rclone](https://rclone.org) 完成传输与挂载，并按平台借助对应的挂载驱动：**Windows 用 WinFsp，macOS 用 macFUSE / FUSE-T，Linux 用内核自带的 FUSE（libfuse）**。核心能力不依赖任何单一驱动，每个平台的驱动只是该平台下 rclone 挂载所必需的系统组件。
 **没有账号、没有登录、没有广告、不联网验证**——打开就用，断网也能用。
 
 > A cross-platform desktop GUI that mounts SMB / WebDAV / FTP / SFTP / S3 as local drives.
-> Powered by rclone + WinFsp / macFUSE / fuse3. No account, no sign-in, no ads, fully offline.
+> Powered by rclone, with the platform mount driver it needs: WinFsp (Windows), macFUSE / FUSE-T (macOS), kernel FUSE + libfuse (Linux). No account, no sign-in, no ads, fully offline.
 
 [![build](https://github.com/Jie-baobao/rclone-mount-manager/actions/workflows/build.yml/badge.svg)](https://github.com/Jie-baobao/rclone-mount-manager/actions/workflows/build.yml)
 [![release](https://img.shields.io/github/v/release/Jie-baobao/rclone-mount-manager)](https://github.com/Jie-baobao/rclone-mount-manager/releases)

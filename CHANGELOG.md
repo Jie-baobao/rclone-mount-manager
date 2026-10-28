@@ -2,7 +2,7 @@
 
 每个版本改了什么，按时间倒序列出。安装包在 [Releases](https://github.com/Jie-baobao/rclone-mount-manager/releases) 页面下载。
 
-## v0.3.9 — 未发布
+## v0.3.9 — 2026-10-28
 
 ### 新增
 
@@ -26,6 +26,9 @@
 - **Linux 挂载报 `cannot open: /mnt/nas: no such file or directory`**：挂载前自动创建挂载点目录；
   没权限创建时直接提示 `sudo mkdir -p <挂载点>`。
 - **deepin 托盘左键 / 双击没反应**：Linux 上改用 tray-icon 的 KSNI 后端（libappindicator 后端不发点击事件）。
+- **README 开头的依赖描述不严谨**：原来笼统写成「基于 rclone 与平台原生 FUSE 驱动」，把 Windows 漏掉了。
+  现在按平台说明：Windows 用 WinFsp，macOS 用 macFUSE / FUSE-T，Linux 用内核 FUSE（libfuse），
+  并说明核心能力不依赖任何单一驱动。
 
 ## v0.3.8 — 2026-10-27
 
