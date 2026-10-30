@@ -13,6 +13,8 @@
   来自 udisks，永远列不出来。现在挂载成功后会自动往文件管理器书签里加一条（deepin / UOS 写
   `dde-file-manager.json` 的 `BookMark`，GTK 系写 `~/.config/gtk-3.0/bookmarks`），
   左侧栏「书签」里点一下就能进去；卸载 / 删除连接时对应书签自动移除，不留点不开的空目录。
+  deepin 新旧两代配置文件位置（`dde-file-manager.json` 与 `dde-file-manager/` 子目录）都支持；
+  GNOME / XFCE / Cinnamon 等 GTK 系文件管理器走标准 `~/.config/gtk-3.0/bookmarks`。
 - **macOS 挂载后 Finder 看不见**：Finder 侧栏只显示挂载在 `/Volumes` 下的卷，挂家目录里
   是看不见的（和 Linux 进不了「磁盘列表」是同一类问题）。现在新建连接默认挂载点是
   `/Volumes/<名字>`（/Volumes 由 admin 组管理，建目录不需要授权）；老的 `~/mnt/<名字>`、

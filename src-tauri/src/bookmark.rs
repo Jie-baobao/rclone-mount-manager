@@ -5,9 +5,11 @@
 //! 注册卷，才有盘符可显示）。要让它「看得见」，只能塞一条书签。
 //!
 //! 两处都写：
-//!   - `~/.config/deepin/dde-file-manager.json`：deepin / UOS 文件管理器真正读的书签表，
-//!     `BookMark.Items` 里存 locateUrl（路径的 base64）、url、name，侧栏顺序另记在
-//!     `SideBar/ItemOrder`。**文件不存在或解析失败时不动它**，避免把用户配置写坏。
+//!   - `~/.config/deepin/dde-file-manager.json`（UOS / deepin V20）和
+//!     `~/.config/deepin/dde-file-manager/dde-file-manager.json`（deepin V23 起）：
+//!     deepin 文件管理器真正读的书签表，`BookMark.Items` 里存 locateUrl（路径的 base64）、
+//!     url、name，侧栏顺序另记在扁平键 `SideBar/ItemOrder`。**文件不存在或解析失败时不动它**，
+//!     避免把用户配置写坏。
 //!   - `~/.config/gtk-3.0/bookmarks`：GTK 系文件管理器（nautilus 等）读的标准文件，
 //!     一行 `file:///path 名字`。
 //!
@@ -101,22 +103,50 @@ fn sync_gtk(target: &str, label: &str, mounted: bool) {
 
 #[cfg(target_os = "linux")]
 fn sync_deepin(target: &str, label: &str, mounted: bool) {
-    use serde_json::{json, Value};
+    use serde_json::Value;
 
-    let Some(path) = config_dir().map(|d| d.join("deepin").join("dde-file-manager.json")) else {
+    // deepin / UOS 的配置文件有两个可能位置：老版（UOS / deepin V20）直接放在
+    // ~/.config/deepin/ 下，新版（deepin V23 起）挪进了 dde-file-manager 子目录。
+    // 都不存在 = 不是 deepin / UOS，或用户还没打开过文件管理器。不主动创建，
+    // 免得写出一份结构不全的配置把它顶坏；存在的每个都同步一遍。
+    let Some(dir) = config_dir() else {
         return;
     };
-    // 没这个文件 = 不是 deepin / UOS，或用户还没打开过文件管理器。不主动创建，
-    // 免得写出一份结构不全的配置把它顶坏。
-    let Ok(raw) = std::fs::read_to_string(&path) else {
-        return;
-    };
-    let Ok(mut root) = serde_json::from_str::<Value>(&raw) else {
-        return;
-    };
-    if !root.is_object() {
-        return;
+    let candidates = [
+        dir.join("deepin").join("dde-file-manager.json"),
+        dir.join("deepin")
+            .join("dde-file-manager")
+            .join("dde-file-manager.json"),
+    ];
+    for path in candidates.into_iter().filter(|p| p.exists()) {
+        let Ok(raw) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(mut root) = serde_json::from_str::<Value>(&raw) else {
+            continue;
+        };
+        if !root.is_object() {
+            continue;
+        }
+        if sync_deepin_file(&path, &mut root, target, label, mounted) {
+            // 改的是别人的配置文件，先留一份 .bak
+            let _ = std::fs::copy(&path, path.with_extension("json.bak"));
+            if let Ok(text) = serde_json::to_string_pretty(&root) {
+                let _ = std::fs::write(&path, text);
+            }
+        }
     }
+}
+
+#[cfg(target_os = "linux")]
+fn sync_deepin_file(
+    path: &std::path::Path,
+    root: &mut serde_json::Value,
+    target: &str,
+    label: &str,
+    mounted: bool,
+) -> bool {
+    use serde_json::{json, Value};
     let url = format!("file://{}", encode_path(target));
 
     // ---- BookMark.Items ----
@@ -176,11 +206,7 @@ fn sync_deepin(target: &str, label: &str, mounted: bool) {
     }
 
     if !changed {
-        return;
+        return false;
     }
-    // 改的是别人的配置文件，先留一份 .bak
-    let _ = std::fs::copy(&path, path.with_extension("json.bak"));
-    if let Ok(text) = serde_json::to_string_pretty(&root) {
-        let _ = std::fs::write(&path, text);
-    }
+    true
 }
