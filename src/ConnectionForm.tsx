@@ -69,8 +69,9 @@ export default function ConnectionForm({ initial, env, t, onClose, onSaved }: Pr
   const meta = PROTOCOL_META[protocol];
   const isS3 = protocol === "s3";
 
-  // 新建连接时挂载点默认放家目录：/mnt 属于 root，普通用户建不了目录，
-  // 挂载时会直接报「权限不够（os error 13）」。编辑已有连接不动它的设置。
+  // 新建连接时挂载点用后端给的平台默认值（Linux 家目录、macOS /Volumes）：
+  // /mnt 属于 root 普通用户建不了目录，macOS 挂家目录 Finder 又看不见。
+  // 编辑已有连接不动它的设置。
   useEffect(() => {
     if (editing || win) return;
     let alive = true;

@@ -318,15 +318,21 @@ fn home_dir() -> Option<std::path::PathBuf> {
     std::env::var_os("HOME").map(std::path::PathBuf::from)
 }
 
-/// 新建连接时的默认挂载目标。Windows 给一个固定盘符；unix 放家目录下，
-/// 因为 `/mnt` 属于 root，普通用户建不了目录，一挂就报权限错误（deepin 上实测）。
+/// 新建连接时的默认挂载目标。Windows 给一个固定盘符；macOS 用 /Volumes（Finder 侧栏
+/// 只显示挂载在 /Volumes 下的卷，挂家目录里看不见；/Volumes 是 root:admin 且 admin 组
+/// 可写，管理员账户建目录不需要授权）；Linux 放家目录下，因为 /mnt 属于 root，
+/// 普通用户建不了目录，一挂就报权限错误（deepin 上实测）。
 #[tauri::command]
 fn default_mount_target() -> String {
     #[cfg(windows)]
     {
         "Z:".to_string()
     }
-    #[cfg(unix)]
+    #[cfg(target_os = "macos")]
+    {
+        "/Volumes/nas".to_string()
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
     {
         match home_dir() {
             Some(h) => h.join("mnt").join("nas").to_string_lossy().to_string(),
@@ -391,6 +397,7 @@ fn ensure_mount_point(target: &str) -> Result<(), String> {
         }
     }
 
+    #[cfg(not(target_os = "macos"))]
     let alt = home_dir()
         .map(|h| {
             format!(
@@ -399,6 +406,9 @@ fn ensure_mount_point(target: &str) -> Result<(), String> {
             )
         })
         .unwrap_or_default();
+    // macOS 连家目录挂载点都不推荐了（Finder 看不见），失败就只能手动建
+    #[cfg(target_os = "macos")]
+    let alt = String::new();
     Err(format!(
         "挂载点 {t} 不存在，自动创建被系统拒绝（需要管理员权限）。请在终端执行 `sudo mkdir -p {t}` 后重试{alt}。"
     ))
@@ -431,7 +441,9 @@ fn normalize_target(raw: &str) -> String {
 /// 老版本的默认挂载点在 `/mnt/<名字>` 下，而 `/mnt` 属于 root：开了自动登录的用户
 /// 每次挂载都要弹一次 polkit 授权窗输密码。这里把这类连接一次性挪到家目录
 /// （`~/mnt/<名字>`），从此挂载不再需要任何密码。
-/// 只处理直接挂在 /mnt 下一层的路径——更深的层级（如 /mnt/disk/nas）可能是用户有意为之。
+/// macOS 额外把 `~/mnt/<名字>`、`/mnt/<名字>` 一起迁到 `/Volumes/<名字>`——Finder 侧栏
+/// 只显示挂载在 /Volumes 下的卷，挂别处看不见（和 Linux 进不了磁盘列表是同一类问题）。
+/// 更深的层级（如 /mnt/disk/nas）可能是用户有意为之，不作改动。
 /// 返回 (连接名, 新路径)，前端据此弹一次提示。
 #[cfg(unix)]
 fn migrate_mnt_targets(app: &AppHandle) -> Vec<(String, String)> {
@@ -440,18 +452,33 @@ fn migrate_mnt_targets(app: &AppHandle) -> Vec<(String, String)> {
     if conns.is_empty() {
         return moved;
     }
-    let Some(home) = home_dir() else {
-        return moved;
-    };
+    let home = home_dir();
     for c in conns.iter_mut() {
         let t = c.target.trim().to_string();
-        let Some(rest) = t.strip_prefix("/mnt/") else {
-            continue;
+        let rest = match () {
+            _ if t.starts_with("/mnt/") => t.strip_prefix("/mnt/"),
+            #[cfg(target_os = "macos")]
+            _ => home.as_ref().and_then(|h| {
+                t.strip_prefix(&format!("{}/mnt/", h.display()))
+            }),
+            #[cfg(not(target_os = "macos"))]
+            _ => None,
         };
+        let Some(rest) = rest else { continue };
         if rest.is_empty() || rest.contains('/') {
             continue;
         }
-        let new_target = home.join("mnt").join(rest).to_string_lossy().to_string();
+        let new_target = if cfg!(target_os = "macos") {
+            let nt = format!("/Volumes/{rest}");
+            // /Volumes 下已有同名位置（比如真插了块叫 nas 的盘）就不动，免得打架
+            if std::path::Path::new(&nt).exists() {
+                continue;
+            }
+            nt
+        } else {
+            let Some(h) = &home else { continue };
+            h.join("mnt").join(rest).to_string_lossy().to_string()
+        };
         if new_target == t {
             continue;
         }
