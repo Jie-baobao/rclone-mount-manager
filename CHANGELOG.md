@@ -9,12 +9,16 @@
 - **挂载点还在 `/mnt` 下时会要求输密码**：系统开了自动登录，挂载却弹出 polkit 授权窗，
   体验割裂。现在启动时会把这类连接（直接挂在 `/mnt/<名字>` 下的）一次性迁到家目录
   `~/mnt/<名字>` 并落盘，同时弹提示告诉你迁到哪儿；家目录不需要管理员权限，此后再挂载不会再问密码。
-- **Linux 文件管理器里看不到挂载的盘**：FUSE 挂载不是块设备，deepin 文件管理器左侧的「磁盘列表」
-  来自 udisks，永远列不出来。现在挂载成功后会自动往文件管理器书签里加一条（deepin / UOS 写
-  `dde-file-manager.json` 的 `BookMark`，GTK 系写 `~/.config/gtk-3.0/bookmarks`），
+- **Linux 文件管理器里看不到挂载的盘**：FUSE 挂载不是块设备，文件管理器左侧的「磁盘 / 设备」
+  列表来自 udisks，永远列不出来。现在挂载成功后会自动往文件管理器书签里加一条，
   左侧栏「书签」里点一下就能进去；卸载 / 删除连接时对应书签自动移除，不留点不开的空目录。
-  deepin 新旧两代配置文件位置（`dde-file-manager.json` 与 `dde-file-manager/` 子目录）都支持；
-  GNOME / XFCE / Cinnamon 等 GTK 系文件管理器走标准 `~/.config/gtk-3.0/bookmarks`。
+  各桌面环境分别支持：
+  - deepin / UOS：写 `dde-file-manager.json` 的 `BookMark`（V20 与 V23 两种配置位置都认，改前备份 `.bak`）
+  - GNOME / XFCE / Cinnamon / MATE / UKUI 等 GTK 系：写标准 `~/.config/gtk-3.0/bookmarks`
+  - KDE Plasma 5 / 6（Dolphin）：写 `~/.local/share/user-places.xbel` 的 XBEL 条目
+    （只在文件已存在时写，避免顶掉 Plasma 首次生成的默认位置）
+  - LXQt 2.x（libfm-qt 2.1 起用自己的书签文件）：写 `~/.local/share/libfm-qt/bookmarks`
+    （同样只在已存在时写，避免干扰它从 GTK 文件的迁移）
 - **macOS 挂载后 Finder 看不见**：Finder 侧栏只显示挂载在 `/Volumes` 下的卷，挂家目录里
   是看不见的（和 Linux 进不了「磁盘列表」是同一类问题）。现在新建连接默认挂载点是
   `/Volumes/<名字>`（/Volumes 由 admin 组管理，建目录不需要授权）；老的 `~/mnt/<名字>`、
