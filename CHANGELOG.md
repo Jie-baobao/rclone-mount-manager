@@ -2,7 +2,7 @@
 
 每个版本改了什么，按时间倒序列出。安装包在 [Releases](https://github.com/Jie-baobao/rclone-mount-manager/releases) 页面下载。
 
-## v0.3.10 — 未发布
+## v0.3.10 — 2026-10-30
 
 ### 修正
 
