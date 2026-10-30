@@ -310,6 +310,7 @@
   "toast.savedMountFail": "Saved, but mounting failed: {e}",
   "toast.savedMounted": "Saved and mounted to {target}",
   "toast.savedReconnect": "Saved and reconnected",
+  "toast.targetMigrated": "Mount point moved into your home directory, so mounting no longer needs a password: {detail}",
   "toast.unmountAll": "Unmounted {n} connections",
   "toast.unmounted": "{name} unmounted",
   "traffic.allConns": "All connections",

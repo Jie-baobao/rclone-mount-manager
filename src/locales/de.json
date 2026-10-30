@@ -310,6 +310,7 @@
   "toast.savedMountFail": "Gespeichert, aber Einhängen fehlgeschlagen: {e}",
   "toast.savedMounted": "Gespeichert und nach {target} eingehängt",
   "toast.savedReconnect": "Gespeichert und neu verbunden",
+  "toast.targetMigrated": "Einhängepunkt ins Home-Verzeichnis verschoben – Mounten braucht kein Passwort mehr: {detail}",
   "toast.unmountAll": "{n} Verbindungen ausgehängt",
   "toast.unmounted": "{name} ausgehängt",
   "traffic.allConns": "Alle Verbindungen",

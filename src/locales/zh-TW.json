@@ -310,6 +310,7 @@
   "toast.savedMountFail": "已儲存，但自動掛載失敗：{e}",
   "toast.savedMounted": "已儲存並掛載到 {target}",
   "toast.savedReconnect": "已儲存並重新連線",
+  "toast.targetMigrated": "掛載點已遷到家目錄，以後掛載不用再輸入密碼：{detail}",
   "toast.unmountAll": "已卸載 {n} 個連線",
   "toast.unmounted": "{name} 已卸載",
   "traffic.allConns": "全部連線",

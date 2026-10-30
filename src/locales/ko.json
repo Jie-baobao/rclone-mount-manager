@@ -310,6 +310,7 @@
   "toast.savedMountFail": "저장했지만 자동 마운트 실패: {e}",
   "toast.savedMounted": "저장하고 {target}에 마운트했습니다",
   "toast.savedReconnect": "저장하고 다시 연결했습니다",
+  "toast.targetMigrated": "마운트 지점을 홈 디렉터리로 옮겼습니다. 이제 마운트할 때 비밀번호가 필요 없습니다: {detail}",
   "toast.unmountAll": "{n}개 연결의 마운트를 해제했습니다",
   "toast.unmounted": "{name} 마운트를 해제했습니다",
   "traffic.allConns": "모든 연결",

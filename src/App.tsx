@@ -132,6 +132,20 @@ export default function App() {
       })
       .then((un) => unlisteners.push(un));
 
+    // 老配置：挂载点在 /mnt 下的，后端已经挪到家目录（/mnt 要 root，会弹密码）
+    events
+      .onTargetsMigrated((moved) => {
+        const tr = tRef.current;
+        // 一条就写清「名字 → 新路径」，多条只列名字（路径太长，toast 放不下）
+        const detail =
+          moved.length === 1
+            ? `${moved[0][0]} → ${moved[0][1]}`
+            : moved.map(([name]) => name).join("、");
+        notify("ok", tr("toast.targetMigrated", { detail }));
+        refresh();
+      })
+      .then((un) => unlisteners.push(un));
+
     // 「发送到」：资源管理器点了菜单项（可能是第二个实例转发过来的）
     events
       .onSendtoRequest((req) => setSendReq(req))

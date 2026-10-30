@@ -354,6 +354,11 @@ export const events = {
     isMock() ? mockListen() : listen<SendProgress>("sendto-progress", (e) => cb(e.payload)),
   onSendtoDone: (cb: (r: SendReport) => void): Promise<UnlistenFn> =>
     isMock() ? mockListen() : listen<SendReport>("sendto-done", (e) => cb(e.payload)),
+  /** 老配置里挂在 /mnt 下的连接被自动迁到家目录（以后挂载不再需要管理员密码） */
+  onTargetsMigrated: (cb: (moved: Array<[string, string]>) => void): Promise<UnlistenFn> =>
+    isMock()
+      ? mockListen()
+      : listen<Array<[string, string]>>("mount-target-migrated", (e) => cb(e.payload)),
 };
 
 /** 后端推送的通知请求 */

@@ -1,4 +1,5 @@
 mod autostart;
+mod bookmark;
 mod crypt;
 mod diag;
 mod model;
@@ -427,6 +428,42 @@ fn normalize_target(raw: &str) -> String {
     }
 }
 
+/// 老版本的默认挂载点在 `/mnt/<名字>` 下，而 `/mnt` 属于 root：开了自动登录的用户
+/// 每次挂载都要弹一次 polkit 授权窗输密码。这里把这类连接一次性挪到家目录
+/// （`~/mnt/<名字>`），从此挂载不再需要任何密码。
+/// 只处理直接挂在 /mnt 下一层的路径——更深的层级（如 /mnt/disk/nas）可能是用户有意为之。
+/// 返回 (连接名, 新路径)，前端据此弹一次提示。
+#[cfg(unix)]
+fn migrate_mnt_targets(app: &AppHandle) -> Vec<(String, String)> {
+    let mut moved = Vec::new();
+    let mut conns = store::load_connections(app);
+    if conns.is_empty() {
+        return moved;
+    }
+    let Some(home) = home_dir() else {
+        return moved;
+    };
+    for c in conns.iter_mut() {
+        let t = c.target.trim().to_string();
+        let Some(rest) = t.strip_prefix("/mnt/") else {
+            continue;
+        };
+        if rest.is_empty() || rest.contains('/') {
+            continue;
+        }
+        let new_target = home.join("mnt").join(rest).to_string_lossy().to_string();
+        if new_target == t {
+            continue;
+        }
+        c.target = new_target.clone();
+        moved.push((c.name.clone(), new_target));
+    }
+    if !moved.is_empty() {
+        let _ = store::save_connections(app, &conns);
+    }
+    moved
+}
+
 /// 启动挂载并把会话登记进状态表
 fn start_session(app: &AppHandle, state: &AppState, conn: &Connection, restarts: u32) -> Result<u32, String> {
     let log_path = store::mount_log_path(app, &conn.id)?;
@@ -461,6 +498,8 @@ fn start_session(app: &AppHandle, state: &AppState, conn: &Connection, restarts:
         .insert(conn.id.clone(), StatsSnapshot::default());
     state.errors.lock().unwrap().remove(&conn.id);
     state.health.lock().unwrap().insert(conn.id.clone(), Health::default());
+    // 挂上了：在 Linux 文件管理器侧栏加一条书签，FUSE 挂载进不了「磁盘列表」
+    bookmark::sync(&conn.target, &conn.name, true);
     Ok(pid)
 }
 
@@ -666,8 +705,15 @@ fn set_pinned(app: AppHandle, id: String, pinned: bool) -> Result<(), String> {
 
 #[tauri::command]
 fn delete_connection(app: AppHandle, state: State<'_, AppState>, id: String) -> Result<(), String> {
+    // 先记住挂载点和名字：连接马上要删，之后就没处查了
+    let gone = store::load_connections(&app)
+        .into_iter()
+        .find(|c| c.id == id);
     if let Some(mut session) = state.sessions.lock().unwrap().remove(&id) {
         let _ = rclone::unmount(&mut session.child, "");
+    }
+    if let Some(c) = &gone {
+        bookmark::sync(&c.target, &c.name, false);
     }
     state.errors.lock().unwrap().remove(&id);
     state.health.lock().unwrap().remove(&id);
@@ -709,6 +755,8 @@ fn mount(app: AppHandle, state: State<'_, AppState>, id: String) -> Result<Mount
     };
     if !alive {
         state.sessions.lock().unwrap().remove(&id);
+        // 没挂起来：刚加的书签得撤掉，不然侧栏留一条点进去是空目录的入口
+        bookmark::sync(&conn.target, &conn.name, false);
         let tail = store::mount_log_path(&app, &id)
             .map(|p| rclone::tail_log(&p, 15))
             .unwrap_or_default();
@@ -741,12 +789,11 @@ fn unmount(app: AppHandle, state: State<'_, AppState>, id: String) -> Result<(),
         .unwrap()
         .remove(&id)
         .ok_or_else(|| "该连接当前未挂载".to_string())?;
-    let target = store::load_connections(&app)
-        .into_iter()
-        .find(|c| c.id == id)
-        .map(|c| c.target)
-        .unwrap_or_default();
+    let conn = store::load_connections(&app).into_iter().find(|c| c.id == id);
+    let target = conn.as_ref().map(|c| c.target.clone()).unwrap_or_default();
+    let name = conn.map(|c| c.name).unwrap_or_default();
     rclone::unmount(&mut session.child, &target)?;
+    bookmark::sync(&target, &name, false);
     state.errors.lock().unwrap().remove(&id);
     state.health.lock().unwrap().remove(&id);
     state.stats.lock().unwrap().remove(&id);
@@ -780,14 +827,15 @@ fn mount_all(app: AppHandle, state: State<'_, AppState>) -> Result<usize, String
 #[tauri::command]
 fn unmount_all(app: AppHandle, state: State<'_, AppState>) -> Result<usize, String> {
     let drained: Vec<(String, Session)> = state.sessions.lock().unwrap().drain().collect();
-    let targets: HashMap<String, String> = store::load_connections(&app)
+    let targets: HashMap<String, (String, String)> = store::load_connections(&app)
         .into_iter()
-        .map(|c| (c.id, c.target))
+        .map(|c| (c.id, (c.target, c.name)))
         .collect();
     let mut count = 0;
     for (id, mut s) in drained {
-        let target = targets.get(&id).cloned().unwrap_or_default();
+        let (target, name) = targets.get(&id).cloned().unwrap_or_default();
         let _ = rclone::unmount(&mut s.child, &target);
+        bookmark::sync(&target, &name, false);
         count += 1;
     }
     let _ = app.emit("state-changed", ());
@@ -1330,6 +1378,8 @@ fn spawn_supervisor(app: AppHandle) {
                     .map(|p| rclone::tail_log(&p, 8))
                     .unwrap_or_default();
                 state.errors.lock().unwrap().insert(id.clone(), tail.clone());
+                // 进程掉了，挂载点已经不在：书签先撤，重连成功再自动加回来
+                bookmark::sync(&conn.target, &conn.name, false);
 
                 if conn.reconnect && restarts < 5 {
                     // 退避：2s, 5s, 8s, 11s, 14s
@@ -1694,6 +1744,16 @@ pub fn run() {
 
             // 清掉上次被强杀残留的「发送到」菜单项（此时还没有任何挂载）
             sync_sendto_menu(app.handle());
+
+            // 老配置里挂在 /mnt 下的连接挪到家目录：/mnt 要 root，自动登录的用户
+            // 每次挂载都会被要求输密码。必须在自动挂载之前做。
+            #[cfg(unix)]
+            {
+                let moved = migrate_mnt_targets(app.handle());
+                if !moved.is_empty() {
+                    let _ = app.emit("mount-target-migrated", moved);
+                }
+            }
 
             let argv: Vec<String> = std::env::args().collect();
             let pending = parse_sendto_args(&argv);

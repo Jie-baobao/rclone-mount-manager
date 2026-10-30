@@ -310,6 +310,7 @@
   "toast.savedMountFail": "Enregistré, mais le montage a échoué : {e}",
   "toast.savedMounted": "Enregistré et monté sur {target}",
   "toast.savedReconnect": "Enregistré et reconnecté",
+  "toast.targetMigrated": "Point de montage déplacé dans votre dossier personnel : plus besoin de mot de passe pour monter. {detail}",
   "toast.unmountAll": "{n} connexions démontées",
   "toast.unmounted": "{name} démonté",
   "traffic.allConns": "Toutes les connexions",

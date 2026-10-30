@@ -310,6 +310,7 @@
   "toast.savedMountFail": "保存しましたが、自動マウントに失敗しました：{e}",
   "toast.savedMounted": "保存して {target} にマウントしました",
   "toast.savedReconnect": "保存して再接続しました",
+  "toast.targetMigrated": "マウントポイントをホームディレクトリに移動しました。今後はマウント時にパスワード不要です: {detail}",
   "toast.unmountAll": "{n} 件の接続をアンマウントしました",
   "toast.unmounted": "{name} をアンマウントしました",
   "traffic.allConns": "すべての接続",
