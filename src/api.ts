@@ -239,6 +239,8 @@ export interface Settings {
   lock_on_startup: boolean;
   /** 最小化 / 关闭到托盘时锁定界面；开关只在已设密码时有意义 */
   lock_on_minimize: boolean;
+  /** 锁定时把已挂载的盘一并卸载（解锁后自动挂回）；默认关 */
+  lock_unmount: boolean;
 }
 
 /** 锁屏状态快照（后端 lock_state 命令） */
@@ -247,6 +249,8 @@ export interface LockState {
   has_password: boolean;
   on_startup: boolean;
   on_minimize: boolean;
+  /** 锁定时卸载挂载盘 */
+  on_unmount: boolean;
 }
 
 /** 「发送到」请求：资源管理器点菜单时传进来的目标盘符和文件 */

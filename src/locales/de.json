@@ -228,6 +228,8 @@
   "st.lockMismatch": "Die beiden neuen Passwörter stimmen nicht überein",
   "st.lockOnStartup": "Beim Start sperren — Einbinden erst nach Passwortbestätigung",
   "st.lockOnMinimize": "Oberfläche beim Minimieren / Schließen in den Tray sperren",
+  "st.lockUnmount": "Beim Sperren eingebundene Laufwerke aushängen (nach dem Entsperren wieder einhängen)",
+  "st.lockUnmountNote": "Das Aushängen unterbricht Programme, die auf dieses Laufwerk zugreifen (Kopieren, Videowiedergabe) – deshalb standardmäßig aus.",
   "st.lockNeedPassword": "Legen Sie oben zuerst ein Passwort fest, um diese Schalter zu aktivieren",
   "st.lockTogglesNote": "Änderungen werden zusammen mit „Einstellungen speichern“ unten wirksam",
   "st.lockRecover": "Passwort vergessen? Löschen Sie settings.json im Konfigurationsordner, um die Sperre aufzuheben (Verbindungen bleiben unberührt).",

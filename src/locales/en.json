@@ -228,6 +228,8 @@
   "st.lockMismatch": "The two new passwords do not match",
   "st.lockOnStartup": "Lock on startup — mount only after the password is verified",
   "st.lockOnMinimize": "Lock the interface when minimized / closed to tray",
+  "st.lockUnmount": "Unmount mounted drives when locking (remounted after unlock)",
+  "st.lockUnmountNote": "Unmounting interrupts programs reading or writing these drives (copies, video playback), so it is off by default.",
   "st.lockNeedPassword": "Set an unlock password above before enabling these switches",
   "st.lockTogglesNote": "Switch changes take effect together with the Save settings button below",
   "st.lockRecover": "Forgot the password? Delete settings.json in the config directory to remove the lock (connections are unaffected).",

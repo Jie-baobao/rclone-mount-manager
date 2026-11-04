@@ -228,6 +228,8 @@
   "st.lockMismatch": "两次输入的新密码不一致",
   "st.lockOnStartup": "开机启动时先解锁，验证通过后再自动挂载",
   "st.lockOnMinimize": "最小化 / 关闭到托盘时锁定界面",
+  "st.lockUnmount": "锁定时卸载已挂载的盘（解锁后自动挂回）",
+  "st.lockUnmountNote": "卸载会打断正在读写这个盘的程序（复制、播放视频等），所以默认不开。",
   "st.lockNeedPassword": "先在上方设置解锁密码，才能打开这些开关",
   "st.lockTogglesNote": "开关改动会随下方「保存设置」一起生效",
   "st.lockRecover": "忘记密码：删除配置目录里的 settings.json 即可解除锁定（连接配置不受影响）。",

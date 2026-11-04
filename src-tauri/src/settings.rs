@@ -38,6 +38,9 @@ pub struct Settings {
     pub lock_on_startup: bool,
     /// 最小化 / 关闭到托盘时锁定界面，回到界面要输密码
     pub lock_on_minimize: bool,
+    /// 锁定时把已挂载的盘一并卸载（解锁后按原名单挂回来）。
+    /// 默认关：卸载会打断正在读写的东西，得用户自己决定要不要这么狠。
+    pub lock_unmount: bool,
 }
 
 impl Default for Settings {
@@ -58,6 +61,7 @@ impl Default for Settings {
             lock_hash: None,
             lock_on_startup: false,
             lock_on_minimize: false,
+            lock_unmount: false,
         }
     }
 }
@@ -81,6 +85,7 @@ impl Settings {
         if self.lock_hash.is_none() {
             self.lock_on_startup = false;
             self.lock_on_minimize = false;
+            self.lock_unmount = false;
         }
         Ok(self)
     }

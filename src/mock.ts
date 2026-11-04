@@ -154,7 +154,13 @@ const LOG = `2026/10/26 15:32:11 INFO  : Using config file from config/rclone.co
 let list = [...conns];
 
 // 锁屏（浏览器预览用）：密码明文存内存里没关系，真实后端只存 PBKDF2 哈希
-const lockMock = { locked: false, has_password: false, on_startup: false, on_minimize: false };
+const lockMock = {
+  locked: false,
+  has_password: false,
+  on_startup: false,
+  on_minimize: false,
+  on_unmount: false,
+};
 let mockPassword = "";
 
 function reply(cmd: string, args?: Record<string, unknown>): unknown {
@@ -262,12 +268,14 @@ function reply(cmd: string, args?: Record<string, unknown>): unknown {
         sendto_enabled: true,
         lock_on_startup: false,
         lock_on_minimize: false,
+        lock_unmount: false,
       };
     case "save_settings": {
       // 浏览器预览下把锁屏开关记下来，lock_now 才有东西可核验
       const s = (args?.s ?? {}) as Record<string, unknown>;
       lockMock.on_startup = !!s.lock_on_startup && mockPassword !== "";
       lockMock.on_minimize = !!s.lock_on_minimize && mockPassword !== "";
+      lockMock.on_unmount = !!s.lock_unmount && mockPassword !== "";
       return args?.s;
     }
     case "lock_state":
@@ -283,6 +291,7 @@ function reply(cmd: string, args?: Record<string, unknown>): unknown {
         // 清除密码：开关一并复位（和真实后端行为一致）
         lockMock.on_startup = false;
         lockMock.on_minimize = false;
+        lockMock.on_unmount = false;
       }
       lockMock.locked = false;
       return {
@@ -290,6 +299,7 @@ function reply(cmd: string, args?: Record<string, unknown>): unknown {
         has_password: mockPassword !== "",
         on_startup: lockMock.on_startup,
         on_minimize: lockMock.on_minimize,
+        on_unmount: lockMock.on_unmount,
       };
     }
     case "lock_verify": {

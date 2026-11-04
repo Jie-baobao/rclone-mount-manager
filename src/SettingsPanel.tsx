@@ -29,6 +29,7 @@ const DEFAULTS: Settings = {
   sendto_enabled: true,
   lock_on_startup: false,
   lock_on_minimize: false,
+  lock_unmount: false,
 };
 
 /**
@@ -122,7 +123,12 @@ export default function SettingsPanel({
       setNewPass("");
       setConfirmPass("");
       // 清除密码时后端把开关复位了，跟着同步，免得界面勾着、磁盘上却是关的
-      setCfg((c) => ({ ...c, lock_on_startup: s.on_startup, lock_on_minimize: s.on_minimize }));
+      setCfg((c) => ({
+        ...c,
+        lock_on_startup: s.on_startup,
+        lock_on_minimize: s.on_minimize,
+        lock_unmount: s.on_unmount,
+      }));
       notify("ok", s.has_password ? t("st.lockSaved") : t("st.lockCleared"));
     } catch (e) {
       notify("bad", String(e));
@@ -450,11 +456,23 @@ export default function SettingsPanel({
           />
           {t("st.lockOnMinimize")}
         </label>
+        <label className="check">
+          <input
+            type="checkbox"
+            checked={cfg.lock_unmount}
+            disabled={!lockInfo?.has_password}
+            onChange={(e) => set("lock_unmount", e.target.checked)}
+          />
+          {t("st.lockUnmount")}
+        </label>
       </div>
       {!lockInfo?.has_password ? (
         <p className="tips">{t("st.lockNeedPassword")}</p>
       ) : (
-        <p className="tips">{t("st.lockTogglesNote")}</p>
+        <>
+          <p className="tips">{t("st.lockTogglesNote")}</p>
+          <p className="tips">{t("st.lockUnmountNote")}</p>
+        </>
       )}
       <p className="tips">{t("st.lockRecover")}</p>
 

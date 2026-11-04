@@ -122,6 +122,8 @@ pub struct AppState {
     locked: AtomicBool,
     /// 「发送到」请求是否因锁屏被压住（解锁后补放一次，防止请求白点）
     sendto_held: AtomicBool,
+    /// 因锁屏被卸载的连接 id（解锁后按这份名单挂回去）；空 = 没有需要恢复的
+    lock_unmounted: Mutex<Vec<String>>,
 }
 
 impl Default for AppState {
@@ -136,6 +138,7 @@ impl Default for AppState {
             tray_ready: AtomicBool::new(false),
             locked: AtomicBool::new(false),
             sendto_held: AtomicBool::new(false),
+            lock_unmounted: Mutex::new(Vec::new()),
         }
     }
 }
@@ -1063,6 +1066,8 @@ struct LockState {
     on_startup: bool,
     /// 最小化 / 收托盘时锁定（开关状态，跟随设置）
     on_minimize: bool,
+    /// 锁定时卸载挂载盘（开关状态，跟随设置）
+    on_unmount: bool,
 }
 
 fn lock_snapshot(app: &AppHandle, state: &AppState) -> LockState {
@@ -1072,6 +1077,7 @@ fn lock_snapshot(app: &AppHandle, state: &AppState) -> LockState {
         has_password: s.lock_hash.is_some(),
         on_startup: s.lock_on_startup,
         on_minimize: s.lock_on_minimize,
+        on_unmount: s.lock_unmount,
     }
 }
 
@@ -1091,7 +1097,67 @@ fn lock_if_configured(app: &AppHandle) {
     if s.lock_hash.is_some() && s.lock_on_minimize {
         state.locked.store(true, Ordering::SeqCst);
         let _ = app.emit("lock-changed", true);
+        if s.lock_unmount {
+            unmount_for_lock(app);
+        }
     }
+}
+
+/// 锁屏时把挂着的盘全卸掉（设置里勾了「锁定时卸载挂载盘」才走这里）。
+///
+/// 解锁后要按这份名单原样挂回去，所以卸载前先记 id。
+/// 正在「发送到」传输中的话这一轮不卸：卸载会把 rclone 杀掉，目标盘上留半截文件，
+/// 比「多挂了一会儿」糟糕得多；等下一次锁定再卸。
+fn unmount_for_lock(app: &AppHandle) {
+    let state = app.state::<AppState>();
+    if sendto::running() {
+        return;
+    }
+    let drained: Vec<(String, Session)> = state.sessions.lock().unwrap().drain().collect();
+    if drained.is_empty() {
+        return;
+    }
+    let targets: HashMap<String, (String, String)> = store::load_connections(app)
+        .into_iter()
+        .map(|c| (c.id, (c.target, c.name)))
+        .collect();
+    let mut ids = Vec::with_capacity(drained.len());
+    for (id, mut s) in drained {
+        let (target, name) = targets.get(&id).cloned().unwrap_or_default();
+        let _ = rclone::unmount(&mut s.child, &target);
+        bookmark::sync(&target, &name, false);
+        state.health.lock().unwrap().remove(&id);
+        state.stats.lock().unwrap().remove(&id);
+        ids.push(id);
+    }
+    *state.lock_unmounted.lock().unwrap() = ids;
+    // 和手动卸载一样把账本落盘，别丢掉最后这一分钟的流量
+    let snapshot = state.traffic.lock().unwrap().clone();
+    let _ = store::save_traffic(app, &snapshot);
+    let _ = app.emit("state-changed", ());
+    // 盘没了，资源管理器「发送到」里的入口也要跟着消失
+    sync_sendto_menu(app);
+}
+
+/// 解锁后把锁屏时卸掉的盘挂回来。只挂名单里的、且现在确实没挂着的。
+fn remount_after_unlock(app: &AppHandle) {
+    let state = app.state::<AppState>();
+    let ids = std::mem::take(&mut *state.lock_unmounted.lock().unwrap());
+    if ids.is_empty() {
+        return;
+    }
+    let conns = store::load_connections(app);
+    for id in ids {
+        if state.sessions.lock().unwrap().contains_key(&id) {
+            continue;
+        }
+        let Some(conn) = conns.iter().find(|c| c.id == id) else {
+            continue;
+        };
+        let _ = start_session(app, &state, conn, 0);
+    }
+    let _ = app.emit("state-changed", ());
+    sync_sendto_menu(app);
 }
 
 /// 设置 / 更新 / 清除解锁密码。
@@ -1115,12 +1181,14 @@ fn lock_set_password(
         s.lock_hash = None;
         s.lock_on_startup = false;
         s.lock_on_minimize = false;
+        s.lock_unmount = false;
     } else {
         s.lock_hash = Some(crypt::hash_password(&next)?);
     }
     settings::save(&app, &s)?;
     state.locked.store(false, Ordering::SeqCst);
     let _ = app.emit("lock-changed", false);
+    remount_after_unlock(&app);
     flush_sendto(&app);
     Ok(lock_snapshot(&app, &state))
 }
@@ -1141,7 +1209,8 @@ fn lock_verify(
     }
     state.locked.store(false, Ordering::SeqCst);
     let _ = app.emit("lock-changed", false);
-    // 锁定期间点过「发送到」的话，这时候把关着的小窗补出来
+    // 锁屏时卸掉的盘先挂回来，再放「发送到」的请求——不然请求的目标盘还不存在
+    remount_after_unlock(&app);
     flush_sendto(&app);
     Ok(true)
 }
