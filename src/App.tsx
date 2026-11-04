@@ -2,6 +2,7 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "rea
 import ConnectionForm from "./ConnectionForm";
 import Dashboard from "./Dashboard";
 import SettingsPanel from "./SettingsPanel";
+import LockScreen from "./LockScreen";
 import SortBar, { type SortBy, type SortDir } from "./SortBar";
 import StatsPanel from "./StatsPanel";
 import LogView from "./LogView";
@@ -57,6 +58,12 @@ export default function App() {
   const [sendReq, setSendReq] = useState<SendRequest | null>(null);
   const [toast, setToast] = useState<Toast | null>(null);
   const [busy, setBusy] = useState<string>("");
+  /**
+   * 锁屏：true 时整窗被 LockScreen 盖住（设置弹窗也在内）。
+   * 初始值以后端为准——「启动时先解锁」打开的话，后端一启动就是锁定态。
+   * 是否落锁完全由后端裁决（lock_now 内部按设置核验），前端只负责显示。
+   */
+  const [locked, setLocked] = useState(false);
   const toastTimer = useRef<number | null>(null);
   /** Ctrl+F 聚焦用的搜索框 */
   const searchRef = useRef<HTMLInputElement | null>(null);
@@ -100,6 +107,11 @@ export default function App() {
     refreshEnv();
     api.getSettings().then(setSettings).catch(() => setSettings(null));
     refresh();
+    // 锁定状态以后端为准：「启动时先解锁」开着的话，启动即锁定；收进托盘前也可能已落锁
+    api
+      .lockState()
+      .then((s) => setLocked(s.locked))
+      .catch(() => undefined);
     // 注意：这里不再主动取「发送到」请求。请求的归属是那个独立小窗，
     // 主窗口也去取就会在小窗打开前把请求抢走，变成主界面弹框。
     // 只有小窗建不起来时后端才会把请求推到主窗口（走下面的 onSendtoRequest）。
@@ -151,6 +163,20 @@ export default function App() {
       .onSendtoRequest((req) => setSendReq(req))
       .then((un) => unlisteners.push(un));
 
+    // 锁屏状态变化：后端置锁（收托盘 / 最小化）或解锁（密码验证通过）都广播到这里
+    events
+      .onLockChanged((isLocked) => setLocked(isLocked))
+      .then((un) => unlisteners.push(un));
+
+    // 窗口最小化 / 被遮住时问一次后端要不要落锁；
+    // lock_now 内部会核验「已设密码 + 开了最小化锁定」，没开就是空操作
+    const onVisibility = () => {
+      if (document.visibilityState === "hidden") {
+        void api.lockNow().catch(() => undefined);
+      }
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+
     // 传输结束：弹窗可能已经关了，所以这里统一发一条系统通知
     events
       .onSendtoDone((r) => {
@@ -177,6 +203,7 @@ export default function App() {
 
     return () => {
       unlisteners.forEach((un) => un());
+      document.removeEventListener("visibilitychange", onVisibility);
       window.clearInterval(timer);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -788,6 +815,9 @@ export default function App() {
       )}
 
       {toast && <div className={`toast ${toast.kind}`}>{toast.text}</div>}
+
+      {/* 锁屏压在一切之上：主界面、设置弹窗、发送到确认窗全部被盖住 */}
+      {locked && <LockScreen t={t} onUnlocked={() => setLocked(false)} />}
     </div>
   );
 }

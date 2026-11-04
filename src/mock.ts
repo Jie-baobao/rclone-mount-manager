@@ -153,6 +153,10 @@ const LOG = `2026/10/26 15:32:11 INFO  : Using config file from config/rclone.co
 
 let list = [...conns];
 
+// 锁屏（浏览器预览用）：密码明文存内存里没关系，真实后端只存 PBKDF2 哈希
+const lockMock = { locked: false, has_password: false, on_startup: false, on_minimize: false };
+let mockPassword = "";
+
 function reply(cmd: string, args?: Record<string, unknown>): unknown {
   switch (cmd) {
     case "default_mount_target":
@@ -256,9 +260,51 @@ function reply(cmd: string, args?: Record<string, unknown>): unknown {
         sort_by: "default",
         sort_dir: "asc",
         sendto_enabled: true,
+        lock_on_startup: false,
+        lock_on_minimize: false,
       };
-    case "save_settings":
+    case "save_settings": {
+      // 浏览器预览下把锁屏开关记下来，lock_now 才有东西可核验
+      const s = (args?.s ?? {}) as Record<string, unknown>;
+      lockMock.on_startup = !!s.lock_on_startup && mockPassword !== "";
+      lockMock.on_minimize = !!s.lock_on_minimize && mockPassword !== "";
       return args?.s;
+    }
+    case "lock_state":
+      return { ...lockMock, has_password: mockPassword !== "" };
+    case "lock_set_password": {
+      const cur = (args?.current as string | null) ?? null;
+      const next = (args?.next as string) ?? "";
+      if (mockPassword !== "" && cur !== mockPassword) {
+        throw new Error("当前密码不对，没有修改");
+      }
+      mockPassword = next;
+      if (next === "") {
+        // 清除密码：开关一并复位（和真实后端行为一致）
+        lockMock.on_startup = false;
+        lockMock.on_minimize = false;
+      }
+      lockMock.locked = false;
+      return {
+        locked: false,
+        has_password: mockPassword !== "",
+        on_startup: lockMock.on_startup,
+        on_minimize: lockMock.on_minimize,
+      };
+    }
+    case "lock_verify": {
+      const pw = (args?.password as string) ?? "";
+      if (mockPassword === "") return true;
+      if (pw !== mockPassword) return false;
+      lockMock.locked = false;
+      return true;
+    }
+    case "lock_now": {
+      if (mockPassword !== "" && lockMock.on_minimize) {
+        lockMock.locked = true;
+      }
+      return { ...lockMock, has_password: mockPassword !== "" };
+    }
     case "export_connections":
       // 浏览器预览下带口令就返回一个假的加密信封，方便看导入弹口令的交互
       return args?.password

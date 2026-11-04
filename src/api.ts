@@ -235,6 +235,18 @@ export interface Settings {
   sort_dir: string;
   /** 在资源管理器「发送到」菜单里为已挂载的连接生成入口（Windows，默认开） */
   sendto_enabled: boolean;
+  /** 开机启动时先解锁（验证密码后才自动挂载）；开关只在已设密码时有意义 */
+  lock_on_startup: boolean;
+  /** 最小化 / 关闭到托盘时锁定界面；开关只在已设密码时有意义 */
+  lock_on_minimize: boolean;
+}
+
+/** 锁屏状态快照（后端 lock_state 命令） */
+export interface LockState {
+  locked: boolean;
+  has_password: boolean;
+  on_startup: boolean;
+  on_minimize: boolean;
 }
 
 /** 「发送到」请求：资源管理器点菜单时传进来的目标盘符和文件 */
@@ -314,6 +326,16 @@ export const api = {
   hideWindow: () => call<void>("hide_main_window"),
   getSettings: () => call<Settings>("get_settings"),
   saveSettings: (s: Settings) => call<Settings>("save_settings", { s }),
+  // ---- 锁屏 / 密码保护 ----
+  /** 当前锁定状态与开关（开关联动设置保存，这里只读） */
+  lockState: () => call<LockState>("lock_state"),
+  /** 设置 / 更新密码（传空串=清除密码并复位开关）；已设密码时必须先给 current */
+  lockSetPassword: (current: string | null, next: string) =>
+    call<LockState>("lock_set_password", { current, next }),
+  /** 验证解锁密码：true = 解锁成功（后端已置解锁并广播事件） */
+  lockVerify: (password: string) => call<boolean>("lock_verify", { password }),
+  /** 立即锁定（命令内部会按设置核验：没设密码或没开「最小化锁定」就不锁） */
+  lockNow: () => call<LockState>("lock_now"),
   exportConnections: (password?: string) =>
     call<string>("export_connections", { password: password ?? null }),
   importConnections: (data: string, password?: string) =>
@@ -359,6 +381,9 @@ export const events = {
     isMock()
       ? mockListen()
       : listen<Array<[string, string]>>("mount-target-migrated", (e) => cb(e.payload)),
+  /** 锁屏状态变化：true=已锁定（显示锁屏），false=已解锁 */
+  onLockChanged: (cb: (locked: boolean) => void): Promise<UnlistenFn> =>
+    isMock() ? mockListen() : listen<boolean>("lock-changed", (e) => cb(e.payload)),
 };
 
 /** 后端推送的通知请求 */

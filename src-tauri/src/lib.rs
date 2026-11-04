@@ -117,6 +117,9 @@ pub struct AppState {
     send_req: Mutex<Option<sendto::SendRequest>>,
     /// 托盘是否创建成功：成功时关闭窗口改为"隐藏到托盘"
     tray_ready: AtomicBool,
+    /// 锁屏状态：true 时界面被锁，挂载命令一律拒绝，自动挂载推迟到解锁后。
+    /// 只有后端能解锁（lock_verify 验过密码），前端只负责显示。
+    locked: AtomicBool,
 }
 
 impl Default for AppState {
@@ -129,6 +132,7 @@ impl Default for AppState {
             traffic: Mutex::new(HashMap::new()),
             send_req: Mutex::new(None),
             tray_ready: AtomicBool::new(false),
+            locked: AtomicBool::new(false),
         }
     }
 }
@@ -758,6 +762,10 @@ fn delete_connection(app: AppHandle, state: State<'_, AppState>, id: String) -> 
 
 #[tauri::command]
 fn mount(app: AppHandle, state: State<'_, AppState>, id: String) -> Result<MountState, String> {
+    // 锁屏时不放行：托盘菜单能触发挂载，但界面被锁的窗口期不该有新的盘被挂上来
+    if state.locked.load(Ordering::SeqCst) {
+        return Err("软件已锁定，请先输入密码解锁".into());
+    }
     let conn = store::load_connections(&app)
         .into_iter()
         .find(|c| c.id == id)
@@ -836,6 +844,9 @@ fn unmount(app: AppHandle, state: State<'_, AppState>, id: String) -> Result<(),
 /// 一键挂载全部未挂载的连接（不阻塞界面，逐个起、结果通过事件回报）
 #[tauri::command]
 fn mount_all(app: AppHandle, state: State<'_, AppState>) -> Result<usize, String> {
+    if state.locked.load(Ordering::SeqCst) {
+        return Err("软件已锁定，请先输入密码解锁".into());
+    }
     let list = store::load_connections(&app);
     let mut started = 0;
     for conn in list {
@@ -1020,12 +1031,109 @@ fn get_settings(app: AppHandle) -> Settings {
 }
 
 #[tauri::command]
-fn save_settings(app: AppHandle, s: Settings) -> Result<Settings, String> {
+fn save_settings(app: AppHandle, mut s: Settings) -> Result<Settings, String> {
+    // lock_hash 只能经 lock_set_password 修改：前端快照里没有这个字段（serde 反序列化成 None），
+    // 直接落盘会把已设的密码抹掉，等于一键解除锁定。
+    // 注意顺序：validate() 会在「无密码」时把锁开关复位，所以必须先把磁盘上的哈希塞回来再校验，
+    // 否则用户保存任何设置都会静默关掉锁定开关。
+    s.lock_hash = settings::load(&app).lock_hash;
     let valid = s.validate()?;
     settings::save(&app, &valid)?;
     // 「发送到」开关可能刚被拨动：开着就补齐菜单项，关掉就整个清掉
     sync_sendto_menu(&app);
     Ok(valid)
+}
+
+// ---------------------------------------------------------------- 锁屏 / 密码保护
+
+/// 给前端的锁屏状态快照
+#[derive(serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+struct LockState {
+    /// 当前是否处于锁定状态（界面被锁屏遮罩盖住）
+    locked: bool,
+    /// 是否已设置解锁密码
+    has_password: bool,
+    /// 开机启动时先解锁再挂载（开关状态，跟随设置）
+    on_startup: bool,
+    /// 最小化 / 收托盘时锁定（开关状态，跟随设置）
+    on_minimize: bool,
+}
+
+fn lock_snapshot(app: &AppHandle, state: &AppState) -> LockState {
+    let s = settings::load(app);
+    LockState {
+        locked: state.locked.load(Ordering::SeqCst),
+        has_password: s.lock_hash.is_some(),
+        on_startup: s.lock_on_startup,
+        on_minimize: s.lock_on_minimize,
+    }
+}
+
+#[tauri::command]
+fn lock_state(app: AppHandle, state: State<'_, AppState>) -> LockState {
+    lock_snapshot(&app, &state)
+}
+
+/// 设置 / 更新 / 清除解锁密码。
+/// `next` 为空 = 清除密码（同时把所有锁定开关复位）；已设密码时必须先验过 `current`。
+#[tauri::command]
+fn lock_set_password(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    current: Option<String>,
+    next: String,
+) -> Result<LockState, String> {
+    let mut s = settings::load(&app);
+    if let Some(hash) = &s.lock_hash {
+        let cur = current.unwrap_or_default();
+        if !crypt::verify_password(&cur, hash) {
+            return Err("当前密码不对，没有修改".into());
+        }
+    }
+    if next.is_empty() {
+        // 清除密码：开关一并复位，避免出现「锁了却没密码」的状态
+        s.lock_hash = None;
+        s.lock_on_startup = false;
+        s.lock_on_minimize = false;
+    } else {
+        s.lock_hash = Some(crypt::hash_password(&next)?);
+    }
+    settings::save(&app, &s)?;
+    state.locked.store(false, Ordering::SeqCst);
+    let _ = app.emit("lock-changed", false);
+    Ok(lock_snapshot(&app, &state))
+}
+
+/// 验证解锁密码。成功即解锁并通知前端；失败只返回 false，不透露更多信息。
+#[tauri::command]
+fn lock_verify(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    password: String,
+) -> Result<bool, String> {
+    let s = settings::load(&app);
+    let Some(hash) = &s.lock_hash else {
+        return Ok(true); // 没设密码 = 无锁
+    };
+    if !crypt::verify_password(&password, hash) {
+        return Ok(false);
+    }
+    state.locked.store(false, Ordering::SeqCst);
+    let _ = app.emit("lock-changed", false);
+    Ok(true)
+}
+
+/// 立即锁定（前端在窗口最小化 / 失去可见时调用）。
+/// 命令内部再按设置核验一遍：没设密码或没开「最小化锁定」就不锁。
+#[tauri::command]
+fn lock_now(app: AppHandle, state: State<'_, AppState>) -> LockState {
+    let s = settings::load(&app);
+    if s.lock_hash.is_some() && s.lock_on_minimize {
+        state.locked.store(true, Ordering::SeqCst);
+        let _ = app.emit("lock-changed", true);
+    }
+    lock_snapshot(&app, &state)
 }
 
 /// 导出连接配置为 JSON 字符串。密码以 rclone obscure 形式附带（非明文），
@@ -1357,6 +1465,14 @@ fn spawn_supervisor(app: AppHandle) {
     std::thread::spawn(move || {
         // 启动阶段：等界面准备好再挂，避免和窗口初始化抢资源
         std::thread::sleep(Duration::from_secs(2));
+        // 开机锁定（lock_on_startup）：密码没验证之前一个盘都不挂。
+        // setup 里已按设置把 locked 置好，这里等解锁信号即可。
+        {
+            let state = app.state::<AppState>();
+            while state.locked.load(Ordering::SeqCst) {
+                std::thread::sleep(Duration::from_millis(500));
+            }
+        }
         {
             let state = app.state::<AppState>();
             for conn in store::load_connections(&app)
@@ -1374,6 +1490,12 @@ fn spawn_supervisor(app: AppHandle) {
         loop {
             std::thread::sleep(Duration::from_secs(5));
             let state = app.state::<AppState>();
+
+            // 锁定期间不重连：挂载进程意外退出时，等解锁后再补挂，
+            // 避免「界面锁着、盘却悄悄挂回来了」绕过密码保护。
+            if state.locked.load(Ordering::SeqCst) {
+                continue;
+            }
 
             let exited: Vec<(String, u32)> = {
                 let mut map = state.sessions.lock().unwrap();
@@ -1789,8 +1911,18 @@ pub fn run() {
             // 才不弹主界面；手动双击图标永远显示窗口。
             // 由「发送到」拉起的进程也不弹主界面——用户要的是那个小确认窗，不是一个管理器。
             let silent_arg = argv.iter().any(|a| a.as_str() == "--silent");
-            let silent = silent_arg && settings::load(app.handle()).silent_start;
-            if !silent && pending.is_none() {
+            let lock_cfg = settings::load(app.handle());
+            // 开机锁定：已设密码 + 勾了「启动时先解锁」→ 启动即锁定，
+            // 自动挂载被 supervisor 推迟到解锁之后（这就是“先输密码再挂载”）。
+            // 此时必须亮出主窗口（覆盖静默启动），否则用户不知道要先输密码。
+            let startup_lock = lock_cfg.lock_hash.is_some() && lock_cfg.lock_on_startup;
+            if startup_lock {
+                app.state::<AppState>()
+                    .locked
+                    .store(true, Ordering::SeqCst);
+            }
+            let silent = silent_arg && lock_cfg.silent_start && !startup_lock;
+            if (!silent && pending.is_none()) || startup_lock {
                 if let Some(w) = app.get_webview_window("main") {
                     let _ = w.show();
                     let _ = w.set_focus();
@@ -1809,16 +1941,44 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
-            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                // 只有主窗口「关闭 = 收进托盘」；「发送到」小窗关掉就该销毁
-                if window.label() != "main" {
-                    return;
+            // 两个触发点都要落锁：关闭到托盘（显式动作）、最小化（系统按钮）。
+            // 前端还会在 visibilitychange 时问一次 lock_now，但 WebView 的最小化
+            // 不一定触发页面可见性事件，所以这里用 is_minimized() 再兜一层。
+            match event {
+                tauri::WindowEvent::CloseRequested { api, .. } => {
+                    // 只有主窗口「关闭 = 收进托盘」；「发送到」小窗关掉就该销毁
+                    if window.label() != "main" {
+                        return;
+                    }
+                    let app = window.app_handle();
+                    let state = app.state::<AppState>();
+                    if state.tray_ready.load(Ordering::SeqCst) {
+                        // 收进托盘前按设置落锁：回到界面时要输密码
+                        let s = settings::load(app);
+                        if s.lock_hash.is_some() && s.lock_on_minimize {
+                            state.locked.store(true, Ordering::SeqCst);
+                            let _ = app.emit("lock-changed", true);
+                        }
+                        api.prevent_close();
+                        let _ = window.hide();
+                    }
                 }
-                let state = window.app_handle().state::<AppState>();
-                if state.tray_ready.load(Ordering::SeqCst) {
-                    api.prevent_close();
-                    let _ = window.hide();
+                tauri::WindowEvent::Resized(_) => {
+                    if window.label() != "main" || !window.is_minimized().unwrap_or(false) {
+                        return;
+                    }
+                    let app = window.app_handle();
+                    let state = app.state::<AppState>();
+                    if state.locked.load(Ordering::SeqCst) {
+                        return;
+                    }
+                    let s = settings::load(app);
+                    if s.lock_hash.is_some() && s.lock_on_minimize {
+                        state.locked.store(true, Ordering::SeqCst);
+                        let _ = app.emit("lock-changed", true);
+                    }
                 }
+                _ => {}
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -1846,6 +2006,10 @@ pub fn run() {
             hide_main_window,
             get_settings,
             save_settings,
+            lock_state,
+            lock_set_password,
+            lock_verify,
+            lock_now,
             get_stats,
             reset_stats,
             probe_now,

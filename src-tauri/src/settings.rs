@@ -31,6 +31,13 @@ pub struct Settings {
     pub sort_dir: String,
     /// 在资源管理器「发送到」菜单里为已挂载的连接生成快捷入口（Windows）
     pub sendto_enabled: bool,
+    /// 解锁密码的哈希（PBKDF2-SHA256，格式见 crypt::hash_password）；None = 未设置密码。
+    /// 密码保护的一切开关都以「已设密码」为前提。
+    pub lock_hash: Option<String>,
+    /// 开机启动时先锁定界面，密码验证通过后才执行自动挂载
+    pub lock_on_startup: bool,
+    /// 最小化 / 关闭到托盘时锁定界面，回到界面要输密码
+    pub lock_on_minimize: bool,
 }
 
 impl Default for Settings {
@@ -48,6 +55,9 @@ impl Default for Settings {
             sort_dir: "asc".into(),
             // 默认开启：装完就能在「发送到」里看到已挂载的盘，不需要先去设置里找开关
             sendto_enabled: true,
+            lock_hash: None,
+            lock_on_startup: false,
+            lock_on_minimize: false,
         }
     }
 }
@@ -65,6 +75,12 @@ impl Settings {
         }
         if self.sort_dir != "desc" {
             self.sort_dir = "asc".into();
+        }
+        // 密码保护的所有开关都以「已设密码」为前提：没有密码却开着开关，
+        // 启动时会把用户锁在界面外且永远解不开，这里直接把开关复位。
+        if self.lock_hash.is_none() {
+            self.lock_on_startup = false;
+            self.lock_on_minimize = false;
         }
         Ok(self)
     }

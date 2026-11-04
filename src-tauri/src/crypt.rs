@@ -103,6 +103,54 @@ pub fn decrypt(doc: &serde_json::Value, password: &str) -> Result<String, String
     String::from_utf8(plain).map_err(|_| "解密结果不是有效的文本".to_string())
 }
 
+// ---------------------------------------------------------------- 解锁密码
+
+/// 应用锁屏密码的哈希格式（settings.json 的 lock_hash 字段）：
+/// `rmm-lock$1$<迭代次数>$<salt base64>$<hash base64>`。
+/// 只存 PBKDF2 结果，不存明文——配置文件泄露也推不出密码。
+pub fn hash_password(password: &str) -> Result<String, String> {
+    if password.chars().count() < 4 {
+        return Err("密码至少需要 4 个字符".into());
+    }
+    let mut salt = [0u8; SALT_LEN];
+    rand::rngs::OsRng.fill_bytes(&mut salt);
+    let key = derive_key(password, &salt, ITERATIONS);
+    Ok(format!(
+        "rmm-lock$1${}${}${}",
+        ITERATIONS,
+        B64.encode(salt),
+        B64.encode(key)
+    ))
+}
+
+/// 校验解锁密码；格式不认识或字段缺失一律当作不匹配（宁可锁着也不放行）。
+pub fn verify_password(password: &str, stored: &str) -> bool {
+    let parts: Vec<&str> = stored.split('$').collect();
+    if parts.len() != 5 || parts[0] != "rmm-lock" {
+        return false;
+    }
+    let Ok(iterations) = parts[2].parse::<u32>() else {
+        return false;
+    };
+    let (Ok(salt), Ok(expect)) = (B64.decode(parts[3]), B64.decode(parts[4])) else {
+        return false;
+    };
+    let key = derive_key(password, &salt, iterations);
+    constant_time_eq(&key, &expect)
+}
+
+/// 逐字节比较，不因内容不同而提前返回（避免耗时侧信道）
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (x, y) in a.iter().zip(b.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -115,5 +163,14 @@ mod tests {
         assert!(is_encrypted(&doc));
         assert_eq!(decrypt(&doc, "hunter2").unwrap(), plain);
         assert!(decrypt(&doc, "wrong").is_err());
+    }
+
+    #[test]
+    fn password_hash_roundtrip() {
+        let h = hash_password("secret1").unwrap();
+        assert!(verify_password("secret1", &h));
+        assert!(!verify_password("secret2", &h));
+        assert!(!verify_password("secret1", "rmm-lock$1$120000$xx$yy"));
+        assert!(hash_password("abc").is_err());
     }
 }

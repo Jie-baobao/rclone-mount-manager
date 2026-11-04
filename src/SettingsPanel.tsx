@@ -6,6 +6,7 @@ import {
   isWindows,
   type Connection,
   type EnvInfo,
+  type LockState,
   type MountState,
   type Settings,
   type UpdateReport,
@@ -26,6 +27,8 @@ const DEFAULTS: Settings = {
   sort_by: "default",
   sort_dir: "asc",
   sendto_enabled: true,
+  lock_on_startup: false,
+  lock_on_minimize: false,
 };
 
 /**
@@ -83,6 +86,50 @@ export default function SettingsPanel({
       .then(setAutostartState)
       .catch(() => setAutostartState(false));
   }, []);
+
+  /**
+   * 锁屏状态（是否已设密码）自己拉，不走 cfg——lock_hash 只存在后端，
+   * 前端只知道「有没有」，设置/清除密码走独立命令，不混进「保存设置」。
+   */
+  const [lockInfo, setLockInfo] = useState<LockState | null>(null);
+  const [curPass, setCurPass] = useState("");
+  const [newPass, setNewPass] = useState("");
+  const [confirmPass, setConfirmPass] = useState("");
+  const [lockBusy, setLockBusy] = useState(false);
+
+  useEffect(() => {
+    api
+      .lockState()
+      .then(setLockInfo)
+      .catch(() => setLockInfo(null));
+  }, []);
+
+  /** 设置 / 更新 / 清除解锁密码（新密码留空 = 清除，两个开关一并复位） */
+  async function savePassword() {
+    if (!lockInfo || lockBusy) return;
+    if (newPass !== confirmPass) {
+      notify("bad", t("st.lockMismatch"));
+      return;
+    }
+    setLockBusy(true);
+    try {
+      const s = await api.lockSetPassword(
+        lockInfo.has_password ? curPass : null,
+        newPass,
+      );
+      setLockInfo(s);
+      setCurPass("");
+      setNewPass("");
+      setConfirmPass("");
+      // 清除密码时后端把开关复位了，跟着同步，免得界面勾着、磁盘上却是关的
+      setCfg((c) => ({ ...c, lock_on_startup: s.on_startup, lock_on_minimize: s.on_minimize }));
+      notify("ok", s.has_password ? t("st.lockSaved") : t("st.lockCleared"));
+    } catch (e) {
+      notify("bad", String(e));
+    } finally {
+      setLockBusy(false);
+    }
+  }
 
   const win = isWindows(env);
   const set = <K extends keyof Settings>(key: K, value: Settings[K]) =>
@@ -336,6 +383,80 @@ export default function SettingsPanel({
       </div>
       <p className="tips">{t("st.silentNote")}</p>
       <p className="tips">{t("st.hotkeyNote")}</p>
+
+      {/* 安全：解锁密码 + 两个锁定时机开关（挂载命令在后端也被门禁，不只是界面遮罩） */}
+      <h3 className="set-section">{t("st.sectionSecurity")}</h3>
+      <p className="tips">{t("st.lockIntro")}</p>
+      <div className="form-grid">
+        {lockInfo?.has_password && (
+          <label className="field span2">
+            <span>{t("st.lockCurrent")}</span>
+            <input
+              className="ctl"
+              type="password"
+              autoComplete="current-password"
+              value={curPass}
+              onChange={(e) => setCurPass(e.target.value)}
+            />
+          </label>
+        )}
+        <label className="field span2">
+          <span>{lockInfo?.has_password ? t("st.lockNew") : t("st.lockSet")}</span>
+          <input
+            className="ctl"
+            type="password"
+            autoComplete="new-password"
+            value={newPass}
+            placeholder={lockInfo?.has_password ? t("st.lockLeaveEmpty") : ""}
+            onChange={(e) => setNewPass(e.target.value)}
+          />
+        </label>
+        <label className="field span2">
+          <span>{t("st.lockConfirm")}</span>
+          <input
+            className="ctl"
+            type="password"
+            autoComplete="new-password"
+            value={confirmPass}
+            onChange={(e) => setConfirmPass(e.target.value)}
+          />
+        </label>
+      </div>
+      <div className="row-actions">
+        <button
+          className="btn ghost small"
+          onClick={() => void savePassword()}
+          disabled={lockBusy || (!lockInfo?.has_password && newPass === "")}
+        >
+          {lockBusy ? "…" : lockInfo?.has_password ? t("st.lockUpdateBtn") : t("st.lockSetBtn")}
+        </button>
+      </div>
+      <div className="checks">
+        <label className="check">
+          <input
+            type="checkbox"
+            checked={cfg.lock_on_startup}
+            disabled={!lockInfo?.has_password}
+            onChange={(e) => set("lock_on_startup", e.target.checked)}
+          />
+          {t("st.lockOnStartup")}
+        </label>
+        <label className="check">
+          <input
+            type="checkbox"
+            checked={cfg.lock_on_minimize}
+            disabled={!lockInfo?.has_password}
+            onChange={(e) => set("lock_on_minimize", e.target.checked)}
+          />
+          {t("st.lockOnMinimize")}
+        </label>
+      </div>
+      {!lockInfo?.has_password ? (
+        <p className="tips">{t("st.lockNeedPassword")}</p>
+      ) : (
+        <p className="tips">{t("st.lockTogglesNote")}</p>
+      )}
+      <p className="tips">{t("st.lockRecover")}</p>
 
       {/* 资源管理器集成：只有 Windows 有「发送到」菜单 */}
       {win && (

@@ -1797,3 +1797,57 @@ input::-webkit-credentials-auto-fill-button {
   white-space: normal;
   word-break: break-word;
 }
+
+/* ---- 锁屏：整窗遮罩，密码验证通过才放行 ---- */
+.lockscreen {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg);
+}
+
+.lock-card {
+  width: 320px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 30px 28px 26px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+  text-align: center;
+}
+
+.lock-icon {
+  font-size: 30px;
+  line-height: 1;
+}
+
+.lock-card h2 {
+  margin: 2px 0 0;
+  font-size: 17px;
+}
+
+.lock-card .muted {
+  margin: 0 0 6px;
+  font-size: 12.5px;
+}
+
+.lock-card .ctl {
+  width: 100%;
+  text-align: center;
+  font-size: 15px;
+  letter-spacing: 0.08em;
+}
+
+.lock-card .btn {
+  width: 100%;
+}
+
+.lock-card .tips {
+  margin: 0;
+}
