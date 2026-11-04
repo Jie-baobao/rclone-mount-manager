@@ -230,6 +230,7 @@
   "st.lockOnMinimize": "Lock the interface when minimized / closed to tray",
   "st.lockUnmount": "Unmount mounted drives when locking (remounted after unlock)",
   "st.lockUnmountNote": "Unmounting interrupts programs reading or writing these drives (copies, video playback), so it is off by default.",
+  "st.lockUnmountNeedsLock": "Tick “Lock when minimizing / closing to tray” above first — otherwise unmounting never triggers.",
   "st.lockNeedPassword": "Set an unlock password above before enabling these switches",
   "st.lockTogglesNote": "Switch changes take effect together with the Save settings button below",
   "st.lockRecover": "Forgot the password? Delete settings.json in the config directory to remove the lock (connections are unaffected).",

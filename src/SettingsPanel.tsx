@@ -460,6 +460,8 @@ export default function SettingsPanel({
           <input
             type="checkbox"
             checked={cfg.lock_unmount}
+            // 卸载是「锁定」的附带动作：没开最小化锁定就没有落锁时机，
+            // 这时候仍允许勾（偏好先存着），但下面会给一条提示说明暂时不生效
             disabled={!lockInfo?.has_password}
             onChange={(e) => set("lock_unmount", e.target.checked)}
           />
@@ -472,6 +474,7 @@ export default function SettingsPanel({
         <>
           <p className="tips">{t("st.lockTogglesNote")}</p>
           <p className="tips">{t("st.lockUnmountNote")}</p>
+          {!cfg.lock_on_minimize && <p className="tips">{t("st.lockUnmountNeedsLock")}</p>}
         </>
       )}
       <p className="tips">{t("st.lockRecover")}</p>

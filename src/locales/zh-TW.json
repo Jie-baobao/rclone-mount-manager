@@ -230,6 +230,7 @@
   "st.lockOnMinimize": "最小化 / 關閉到工具列時鎖定介面",
   "st.lockUnmount": "鎖定時卸載已掛載的磁碟（解鎖後自動掛回）",
   "st.lockUnmountNote": "卸載會中斷正在讀寫這個磁碟的程式（複製、播放影片等），所以預設不開。",
+  "st.lockUnmountNeedsLock": "先勾上面的「最小化 / 關閉到託盤時鎖定」，卸載才有觸發時機。",
   "st.lockNeedPassword": "先在上方設定解鎖密碼，才能開啟這些開關",
   "st.lockTogglesNote": "開關變更會隨下方「儲存設定」一起生效",
   "st.lockRecover": "忘記密碼：刪除設定目錄裡的 settings.json 即可解除鎖定（連線設定不受影響）。",

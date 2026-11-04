@@ -230,6 +230,7 @@
   "st.lockOnMinimize": "最小化 / 关闭到托盘时锁定界面",
   "st.lockUnmount": "锁定时卸载已挂载的盘（解锁后自动挂回）",
   "st.lockUnmountNote": "卸载会打断正在读写这个盘的程序（复制、播放视频等），所以默认不开。",
+  "st.lockUnmountNeedsLock": "先勾上面的「最小化 / 关闭到托盘时锁定」，卸载才有触发时机。",
   "st.lockNeedPassword": "先在上方设置解锁密码，才能打开这些开关",
   "st.lockTogglesNote": "开关改动会随下方「保存设置」一起生效",
   "st.lockRecover": "忘记密码：删除配置目录里的 settings.json 即可解除锁定（连接配置不受影响）。",

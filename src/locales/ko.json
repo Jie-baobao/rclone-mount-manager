@@ -230,6 +230,7 @@
   "st.lockOnMinimize": "최소화 / 트레이로 닫을 때 화면 잠금",
   "st.lockUnmount": "잠금 시 마운트된 드라이브 해제(잠금 해제 후 자동 재마운트)",
   "st.lockUnmountNote": "해제하면 해당 드라이브를 사용 중인 프로그램(복사, 동영상 재생 등)이 중단됩니다. 기본값은 꺼짐입니다.",
+  "st.lockUnmountNeedsLock": "위의 “최소화/트레이로 닫을 때 잠금”을 먼저 켜야 해제가 실행됩니다.",
   "st.lockNeedPassword": "이 스위치를 켜려면 먼저 위에서 잠금 해제 비밀번호를 설정하세요",
   "st.lockTogglesNote": "스위치 변경 사항은 아래 「설정 저장」과 함께 적용됩니다",
   "st.lockRecover": "비밀번호를 잊으셨나요? 설정 폴더의 settings.json을 삭제하면 잠금이 해제됩니다(연결 설정은 영향을 받지 않습니다).",

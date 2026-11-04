@@ -230,6 +230,7 @@
   "st.lockOnMinimize": "Verrouiller l'interface lors de la réduction / fermeture dans la zone de notification",
   "st.lockUnmount": "Démonter les lecteurs montés lors du verrouillage (remontés après déverrouillage)",
   "st.lockUnmountNote": "Le démontage interrompt les programmes qui lisent ou écrivent sur ce lecteur (copies, lecture vidéo) ; désactivé par défaut.",
+  "st.lockUnmountNeedsLock": "Cochez d’abord « Verrouiller lors de la réduction / fermeture dans la barre d’état » : sinon le démontage ne se déclenche jamais.",
   "st.lockNeedPassword": "Définissez d'abord un mot de passe ci-dessus pour activer ces options",
   "st.lockTogglesNote": "Les modifications prennent effet avec « Enregistrer les paramètres » ci-dessous",
   "st.lockRecover": "Mot de passe oublié : supprimez settings.json dans le dossier de configuration pour retirer le verrou (les connexions ne sont pas affectées).",
