@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { T } from "./i18n";
 import { api } from "./api";
 
@@ -19,6 +19,24 @@ export default function LockScreen({
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const inputRef = useRef<HTMLInputElement | null>(null);
+
+  /**
+   * 遮罩只挡鼠标，Tab 还能把焦点挪到底下的按钮上、敲回车就能点它。
+   * 所以锁屏期间把 Tab 吃掉、焦点钉在密码框——这层界面里本来也只有它可交互。
+   */
+  useEffect(() => {
+    const el = inputRef.current;
+    el?.focus();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Tab") {
+        e.preventDefault();
+        el?.focus();
+      }
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, []);
 
   async function unlock() {
     if (busy || !password) return;
@@ -50,6 +68,7 @@ export default function LockScreen({
         <input
           className="ctl"
           type="password"
+          ref={inputRef}
           autoFocus
           value={password}
           placeholder={t("lock.placeholder")}

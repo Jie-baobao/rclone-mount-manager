@@ -168,14 +168,9 @@ export default function App() {
       .onLockChanged((isLocked) => setLocked(isLocked))
       .then((un) => unlisteners.push(un));
 
-    // 窗口最小化 / 被遮住时问一次后端要不要落锁；
-    // lock_now 内部会核验「已设密码 + 开了最小化锁定」，没开就是空操作
-    const onVisibility = () => {
-      if (document.visibilityState === "hidden") {
-        void api.lockNow().catch(() => undefined);
-      }
-    };
-    document.addEventListener("visibilitychange", onVisibility);
+    // 注意：这里**不**监听 visibilitychange。WebView2 有窗口遮挡检测——
+    // 被别的窗口完全盖住时页面也会变成 hidden，那样切个资源管理器就会被锁上，
+    // 变成「老要输密码」。落锁只认后端的三个明确动作：点 X、Ctrl+W、最小化。
 
     // 传输结束：弹窗可能已经关了，所以这里统一发一条系统通知
     events
@@ -203,7 +198,6 @@ export default function App() {
 
     return () => {
       unlisteners.forEach((un) => un());
-      document.removeEventListener("visibilitychange", onVisibility);
       window.clearInterval(timer);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps

@@ -120,6 +120,8 @@ pub struct AppState {
     /// 锁屏状态：true 时界面被锁，挂载命令一律拒绝，自动挂载推迟到解锁后。
     /// 只有后端能解锁（lock_verify 验过密码），前端只负责显示。
     locked: AtomicBool,
+    /// 「发送到」请求是否因锁屏被压住（解锁后补放一次，防止请求白点）
+    sendto_held: AtomicBool,
 }
 
 impl Default for AppState {
@@ -133,6 +135,7 @@ impl Default for AppState {
             send_req: Mutex::new(None),
             tray_ready: AtomicBool::new(false),
             locked: AtomicBool::new(false),
+            sendto_held: AtomicBool::new(false),
         }
     }
 }
@@ -1020,6 +1023,8 @@ fn hide_main_window(app: AppHandle) {
         } else {
             let _ = w.minimize();
         }
+        // 藏起来的路径有三条（点 X、Ctrl+W、托盘菜单），落锁统一在这里和 on_window_event 里做
+        lock_if_configured(&app);
     }
 }
 
@@ -1075,6 +1080,20 @@ fn lock_state(app: AppHandle, state: State<'_, AppState>) -> LockState {
     lock_snapshot(&app, &state)
 }
 
+/// 按设置落锁：三条「离开界面」的路径（点 X、Ctrl+W、最小化）共用。
+/// 没设密码、或没勾「最小化锁定」就是空操作；已经锁着也不重复广播。
+fn lock_if_configured(app: &AppHandle) {
+    let state = app.state::<AppState>();
+    if state.locked.load(Ordering::SeqCst) {
+        return;
+    }
+    let s = settings::load(app);
+    if s.lock_hash.is_some() && s.lock_on_minimize {
+        state.locked.store(true, Ordering::SeqCst);
+        let _ = app.emit("lock-changed", true);
+    }
+}
+
 /// 设置 / 更新 / 清除解锁密码。
 /// `next` 为空 = 清除密码（同时把所有锁定开关复位）；已设密码时必须先验过 `current`。
 #[tauri::command]
@@ -1102,6 +1121,7 @@ fn lock_set_password(
     settings::save(&app, &s)?;
     state.locked.store(false, Ordering::SeqCst);
     let _ = app.emit("lock-changed", false);
+    flush_sendto(&app);
     Ok(lock_snapshot(&app, &state))
 }
 
@@ -1121,18 +1141,16 @@ fn lock_verify(
     }
     state.locked.store(false, Ordering::SeqCst);
     let _ = app.emit("lock-changed", false);
+    // 锁定期间点过「发送到」的话，这时候把关着的小窗补出来
+    flush_sendto(&app);
     Ok(true)
 }
 
-/// 立即锁定（前端在窗口最小化 / 失去可见时调用）。
+/// 立即锁定（前端可以拿它做「手动上锁」这类入口）。
 /// 命令内部再按设置核验一遍：没设密码或没开「最小化锁定」就不锁。
 #[tauri::command]
 fn lock_now(app: AppHandle, state: State<'_, AppState>) -> LockState {
-    let s = settings::load(&app);
-    if s.lock_hash.is_some() && s.lock_on_minimize {
-        state.locked.store(true, Ordering::SeqCst);
-        let _ = app.emit("lock-changed", true);
-    }
+    lock_if_configured(&app);
     lock_snapshot(&app, &state)
 }
 
@@ -1379,6 +1397,21 @@ fn parse_sendto_args(args: &[String]) -> Option<sendto::SendRequest> {
 fn queue_sendto(app: &AppHandle, req: sendto::SendRequest) {
     *app.state::<AppState>().send_req.lock().unwrap() = Some(req.clone());
 
+    // 锁定期间不弹小窗：小窗是独立窗口，不在锁屏遮罩的管辖范围内，
+    // 放它出来等于绕开密码往 NAS 里塞文件。请求先留在 send_req 里，
+    // 解锁时由 flush_sendto 放出来，用户点的那次「发送到」不会白点。
+    if app.state::<AppState>().locked.load(Ordering::SeqCst) {
+        app.state::<AppState>()
+            .sendto_held
+            .store(true, Ordering::SeqCst);
+        if let Some(w) = app.get_webview_window("main") {
+            let _ = w.show();
+            let _ = w.unminimize();
+            let _ = w.set_focus();
+        }
+        return;
+    }
+
     match sendto::show_window(app) {
         // 新建：页面加载完会自己 sendto_take，不用再推事件
         Ok(true) => {}
@@ -1395,6 +1428,31 @@ fn queue_sendto(app: &AppHandle, req: sendto::SendRequest) {
             }
             let _ = app.emit_to("main", "sendto-request", req);
         }
+    }
+}
+
+/// 解锁后把压着的「发送到」请求放出来。
+///
+/// 锁定期间 queue_sendto 只把请求存进 send_req、不建窗口；解锁这一步补上。
+/// 小窗已经开着（少见：锁之前刚开过）就把请求推给它，不然它会一直等。
+fn flush_sendto(app: &AppHandle) {
+    // 只有「因为锁屏被压住」的那次才补放，别把历史请求重新弹一遍
+    if !app
+        .state::<AppState>()
+        .sendto_held
+        .swap(false, Ordering::SeqCst)
+    {
+        return;
+    }
+    if app.get_webview_window(sendto::WINDOW_LABEL).is_some() {
+        // 小窗已经开着：取出来推给它（不 take 的话它会一直等新的请求）
+        let req = app.state::<AppState>().send_req.lock().unwrap().take();
+        if let Some(req) = req {
+            let _ = app.emit_to(sendto::WINDOW_LABEL, "sendto-request", req);
+        }
+    } else {
+        // 新窗：请求留在 send_req 里，页面加载后自己 sendto_take
+        let _ = sendto::show_window(app);
     }
 }
 
@@ -1954,11 +2012,7 @@ pub fn run() {
                     let state = app.state::<AppState>();
                     if state.tray_ready.load(Ordering::SeqCst) {
                         // 收进托盘前按设置落锁：回到界面时要输密码
-                        let s = settings::load(app);
-                        if s.lock_hash.is_some() && s.lock_on_minimize {
-                            state.locked.store(true, Ordering::SeqCst);
-                            let _ = app.emit("lock-changed", true);
-                        }
+                        lock_if_configured(app);
                         api.prevent_close();
                         let _ = window.hide();
                     }
@@ -1967,16 +2021,7 @@ pub fn run() {
                     if window.label() != "main" || !window.is_minimized().unwrap_or(false) {
                         return;
                     }
-                    let app = window.app_handle();
-                    let state = app.state::<AppState>();
-                    if state.locked.load(Ordering::SeqCst) {
-                        return;
-                    }
-                    let s = settings::load(app);
-                    if s.lock_hash.is_some() && s.lock_on_minimize {
-                        state.locked.store(true, Ordering::SeqCst);
-                        let _ = app.emit("lock-changed", true);
-                    }
+                    lock_if_configured(window.app_handle());
                 }
                 _ => {}
             }
