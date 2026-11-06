@@ -1851,3 +1851,48 @@ input::-webkit-credentials-auto-fill-button {
 .lock-card .tips {
   margin: 0;
 }
+
+/* ---- 位置冲突弹窗：一条连接一行，右侧挑新位置 ---- */
+.conflict-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.conflict-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+}
+
+/* 名字/原因可能很长（NAS 名字、路径），给中间这段留出可压缩的空间 */
+.conflict-who {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  flex: 1;
+  min-width: 0;
+}
+
+.conflict-who strong,
+.conflict-who span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conflict-pick {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+.conflict-pick .ctl {
+  width: 150px;
+}

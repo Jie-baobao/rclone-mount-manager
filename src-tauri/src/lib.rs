@@ -1,5 +1,6 @@
 mod autostart;
 mod bookmark;
+mod conflict;
 mod crypt;
 mod diag;
 mod model;
@@ -782,6 +783,17 @@ fn mount(app: AppHandle, state: State<'_, AppState>, id: String) -> Result<Mount
         return Ok(state_snapshot(&app, &state, &conn));
     }
 
+    // 保存连接时查过一次，但那一刻到现在之间盘符可能被 U 盘、别的软件
+    // 或者另一条新建的连接占走了。不查就硬挂，rclone 只会吐一句
+    // 「mountpoint is not empty」，用户看不出该改哪儿。
+    // 这里把冲突编码成 Err 交给前端弹窗选新位置，不做自动顺延。
+    if let Some(c) = conflict::scan(&app, std::slice::from_ref(&conn))
+        .into_iter()
+        .next()
+    {
+        return Err(conflict::payload(&[c]));
+    }
+
     start_session(&app, &state, &conn, 0)?;
 
     // 等一小会儿：认证失败 / 驱动缺失会让 rclone 立刻退出，
@@ -853,15 +865,27 @@ fn mount_all(app: AppHandle, state: State<'_, AppState>) -> Result<usize, String
     if state.locked.load(Ordering::SeqCst) {
         return Err("软件已锁定，请先输入密码解锁".into());
     }
-    let list = store::load_connections(&app);
+    let mut list = store::load_connections(&app);
+    // 只检查这一轮真要挂的（已挂着的跳过），冲突的先搁下不挂，
+    // 攒成一个列表交给前端一次性弹窗处理
+    let running: std::collections::HashSet<String> =
+        state.sessions.lock().unwrap().keys().cloned().collect();
+    list.retain(|c| !running.contains(&c.id));
+    let conflicts = conflict::scan(&app, &list);
+    let blocked: std::collections::HashSet<String> =
+        conflicts.iter().map(|c| c.id.clone()).collect();
+
     let mut started = 0;
     for conn in list {
-        if state.sessions.lock().unwrap().contains_key(&conn.id) {
+        if blocked.contains(&conn.id) {
             continue;
         }
         if start_session(&app, &state, &conn, 0).is_ok() {
             started += 1;
         }
+    }
+    if !conflicts.is_empty() {
+        let _ = app.emit("target-conflicts", &conflicts);
     }
     let _ = app.emit("state-changed", ());
     sync_sendto_menu(&app);
@@ -1386,6 +1410,98 @@ fn check_target(app: AppHandle, target: String, exclude_id: String) -> TargetChe
     ok
 }
 
+/// 界面启动后主动拉一次：自动挂载被冲突挡下的那些连接。
+/// 事件有可能早于前端订阅（supervisor 2 秒后就开始挂），所以不能只靠事件。
+#[tauri::command]
+fn pending_conflicts(app: AppHandle, state: State<'_, AppState>) -> Vec<conflict::Conflict> {
+    let running: std::collections::HashSet<String> =
+        state.sessions.lock().unwrap().keys().cloned().collect();
+    let pending: Vec<Connection> = store::load_connections(&app)
+        .into_iter()
+        .filter(|c| c.auto_mount && !running.contains(&c.id))
+        .collect();
+    conflict::scan(&app, &pending)
+}
+
+#[derive(serde::Deserialize)]
+pub struct TargetFix {
+    pub id: String,
+    pub target: String,
+}
+
+/// 用户在冲突弹窗里挑好新位置后调用：先改配置，再直接挂上。
+#[tauri::command]
+fn resolve_target_conflicts(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    fixes: Vec<TargetFix>,
+) -> Result<usize, String> {
+    if state.locked.load(Ordering::SeqCst) {
+        return Err("软件已锁定，请先输入密码解锁".into());
+    }
+    if fixes.is_empty() {
+        return Ok(0);
+    }
+    let mut list = store::load_connections(&app);
+
+    // 整批先校验：任何一条的新位置这会儿又被人占了就整批拒绝，
+    // 免得「改了一半、挂了一半」，用户还得自己猜哪条成了。
+    for f in &fixes {
+        let t = f.target.trim();
+        if t.is_empty() {
+            return Err("新的位置不能为空".into());
+        }
+        if let Some(other) = list
+            .iter()
+            .find(|c| c.id != f.id && c.target.trim().eq_ignore_ascii_case(t))
+        {
+            return Err(format!("{} 已经占用了 {t}，请换一个", other.name));
+        }
+        // 自己原来的位置本来就被占着，不重复拦一次
+        let own = list
+            .iter()
+            .find(|c| c.id == f.id)
+            .map(|c| c.target.trim().eq_ignore_ascii_case(t))
+            .unwrap_or(false);
+        if !own && rclone::target_taken(t) {
+            return Err(format!("{t} 已被系统或其他程序占用，请换一个"));
+        }
+    }
+
+    for f in &fixes {
+        let Some(idx) = list.iter().position(|c| c.id == f.id) else {
+            continue;
+        };
+        let old = list[idx].target.clone();
+        let name = list[idx].name.clone();
+        let new = f.target.trim().to_string();
+        if !old.trim().eq_ignore_ascii_case(&new) {
+            // 旧位置的书签撤掉，否则侧栏留一条点进去是空目录的入口
+            bookmark::sync(&old, &name, false);
+        }
+        list[idx].target = new;
+    }
+    store::save_connections(&app, &list)?;
+    let _ = app.emit("connections-changed", ());
+
+    // 用户在弹窗里选位置，意图就是「挂上」，改完顺手挂，不用再点一次
+    let mut started = 0;
+    for f in &fixes {
+        let Some(conn) = list.iter().find(|c| c.id == f.id).cloned() else {
+            continue;
+        };
+        if state.sessions.lock().unwrap().contains_key(&conn.id) {
+            continue;
+        }
+        if start_session(&app, &state, &conn, 0).is_ok() {
+            started += 1;
+        }
+    }
+    let _ = app.emit("state-changed", ());
+    sync_sendto_menu(&app);
+    Ok(started)
+}
+
 /// 弹一条系统通知。文案由前端按当前语言拼好再传进来，
 /// 这样通知和界面语言永远一致（后端不必再维护一套翻译表）。
 #[tauri::command]
@@ -1602,11 +1718,30 @@ fn spawn_supervisor(app: AppHandle) {
         }
         {
             let state = app.state::<AppState>();
-            for conn in store::load_connections(&app)
+            let pending: Vec<Connection> = store::load_connections(&app)
                 .into_iter()
                 .filter(|c| c.auto_mount)
-            {
+                .collect();
+            // 开机时盘符最容易撞：U 盘还插着、别的软件刚映射了网络驱动器、
+            // 或者两条连接本身配了同一个位置。冲突的不挂，攒一条事件让前端弹窗。
+            let conflicts = conflict::scan(&app, &pending);
+            let blocked: std::collections::HashSet<String> =
+                conflicts.iter().map(|c| c.id.clone()).collect();
+            for conn in pending {
+                if blocked.contains(&conn.id) {
+                    state.errors.lock().unwrap().insert(
+                        conn.id.clone(),
+                        format!(
+                            "{} {} 被占用，没有挂载。请在弹窗里换一个位置。",
+                            conn.name, conn.target
+                        ),
+                    );
+                    continue;
+                }
                 let _ = start_session(&app, &state, &conn, 0);
+            }
+            if !conflicts.is_empty() {
+                let _ = app.emit("target-conflicts", &conflicts);
             }
             let _ = app.emit("state-changed", ());
             // 开机自启动挂上的盘，也要在「发送到」里就位
@@ -1657,7 +1792,21 @@ fn spawn_supervisor(app: AppHandle) {
                 // 进程掉了，挂载点已经不在：书签先撤，重连成功再自动加回来
                 bookmark::sync(&conn.target, &conn.name, false);
 
-                if conn.reconnect && restarts < 5 {
+                if let Some(c) = conflict::scan(&app, std::slice::from_ref(&conn))
+                    .into_iter()
+                    .next()
+                {
+                    // 位置被占了，退避重试五次也不会自己变空 —— 别耗那 40 秒，
+                    // 直接交给前端弹窗，让用户挑个空位
+                    state.errors.lock().unwrap().insert(
+                        id.clone(),
+                        format!(
+                            "{} {} 被占用，重连已暂停。请在弹窗里换一个位置。",
+                            conn.name, conn.target
+                        ),
+                    );
+                    let _ = app.emit("target-conflicts", vec![c]);
+                } else if conn.reconnect && restarts < 5 {
                     // 退避：2s, 5s, 8s, 11s, 14s
                     std::thread::sleep(Duration::from_secs(2 + restarts as u64 * 3));
                     let _ = start_session(&app, &state, &conn, restarts + 1);
@@ -2129,6 +2278,8 @@ pub fn run() {
             probe_now,
             traffic_summary,
             check_target,
+            pending_conflicts,
+            resolve_target_conflicts,
             notify_user,
             export_connections,
             import_connections,

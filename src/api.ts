@@ -176,6 +176,25 @@ export interface TargetCheck {
   owner: string;
 }
 
+/** 挂载时发现位置被占——要弹窗让用户挑新位置的那一条 */
+export interface Conflict {
+  id: string;
+  name: string;
+  /** 现在配置的位置（被占用的那个） */
+  target: string;
+  /** "occupied"（系统或其他程序占了） / "other-connection"（另一条连接配了同一位置） */
+  reason: string;
+  /** reason=other-connection 时占用者的连接名 */
+  owner: string;
+  /** 后端算好的候选位置，用户也可以手动填别的 */
+  candidates: string[];
+}
+
+export interface TargetFix {
+  id: string;
+  target: string;
+}
+
 export interface DiagResult {
   ok: boolean;
   code: number | null;
@@ -309,6 +328,11 @@ export const api = {
   /** 盘符/挂载点预检：别的连接或系统占用了就返回 available=false */
   checkTarget: (target: string, excludeId: string) =>
     call<TargetCheck>("check_target", { target, excludeId }),
+  /** 启动后拉一次：自动挂载被位置冲突挡下的连接（事件可能早于前端订阅） */
+  pendingConflicts: () => call<Conflict[]>("pending_conflicts"),
+  /** 按用户在弹窗里挑的位置改配置并直接挂载，返回挂上的条数 */
+  resolveConflicts: (fixes: TargetFix[]) =>
+    call<number>("resolve_target_conflicts", { fixes }),
   /** 把本次挂载的流量计数清零（峰值、累计、次数），便于单独量一次拷贝 */
   resetStats: (id: string) => call<void>("reset_stats", { id }),
   /** 手动做一次完整探测（真实列目录），返回微秒；会让 NAS 读一次目录 */
@@ -388,6 +412,9 @@ export const events = {
   /** 锁屏状态变化：true=已锁定（显示锁屏），false=已解锁 */
   onLockChanged: (cb: (locked: boolean) => void): Promise<UnlistenFn> =>
     isMock() ? mockListen() : listen<boolean>("lock-changed", (e) => cb(e.payload)),
+  /** 挂载时发现位置被占：列表可能一次带好几条，前端合并成一个弹窗 */
+  onTargetConflicts: (cb: (list: Conflict[]) => void): Promise<UnlistenFn> =>
+    isMock() ? mockListen() : listen<Conflict[]>("target-conflicts", (e) => cb(e.payload)),
 };
 
 /** 后端推送的通知请求 */

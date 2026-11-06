@@ -249,6 +249,17 @@ function reply(cmd: string, args?: Record<string, unknown>): unknown {
         ? { available: false, reason: "other-connection", owner: other.name }
         : { available: true, reason: "", owner: "" };
     }
+    case "pending_conflicts":
+      // 预览环境不主动造冲突：一进页面就弹窗会把演示和截图打断
+      return [];
+    case "resolve_target_conflicts": {
+      const fixes = (args?.fixes as Array<{ id: string; target: string }>) ?? [];
+      for (const f of fixes) {
+        const c = list.find((x) => x.id === f.id);
+        if (c) c.target = f.target;
+      }
+      return fixes.length;
+    }
     case "notify_user":
       return null;
     case "get_autostart":

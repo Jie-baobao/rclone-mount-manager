@@ -1,5 +1,6 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ConnectionForm from "./ConnectionForm";
+import ConflictDialog from "./ConflictDialog";
 import Dashboard from "./Dashboard";
 import SettingsPanel from "./SettingsPanel";
 import LockScreen from "./LockScreen";
@@ -18,6 +19,7 @@ import {
   PROTOCOL_META,
   formatUptimeT,
   type Connection,
+  type Conflict,
   type EnvInfo,
   type MountState,
   type SendRequest,
@@ -30,6 +32,22 @@ import { makeT, resolveLanguage, type T } from "./i18n";
 interface Toast {
   kind: "ok" | "bad";
   text: string;
+}
+
+/**
+ * 后端把「位置被占」编码成 `Err("rmm-conflict:[...]")`，
+ * 这里还原成结构化列表交给弹窗；普通错误仍按原文提示。
+ */
+const CONFLICT_TAG = "rmm-conflict:";
+function parseConflict(e: unknown): Conflict[] | null {
+  const s = e instanceof Error ? e.message : String(e);
+  if (!s.startsWith(CONFLICT_TAG)) return null;
+  try {
+    const list = JSON.parse(s.slice(CONFLICT_TAG.length)) as Conflict[];
+    return Array.isArray(list) ? list : null;
+  } catch {
+    return null;
+  }
 }
 
 export default function App() {
@@ -64,6 +82,12 @@ export default function App() {
    * 是否落锁完全由后端裁决（lock_now 内部按设置核验），前端只负责显示。
    */
   const [locked, setLocked] = useState(false);
+  /**
+   * 挂载时发现位置被占用（U 盘、别的软件、或另一条连接配了同一个位置）。
+   * 后端不做自动顺延——盘符一改，桌面快捷方式和脚本里的 Z: 就全废了——
+   * 只把冲突列表丢过来，由这里合并成一个弹窗让用户一次挑完。
+   */
+  const [conflicts, setConflicts] = useState<Conflict[] | null>(null);
   const toastTimer = useRef<number | null>(null);
   /** Ctrl+F 聚焦用的搜索框 */
   const searchRef = useRef<HTMLInputElement | null>(null);
@@ -79,6 +103,16 @@ export default function App() {
     setToast({ kind, text });
     if (toastTimer.current) window.clearTimeout(toastTimer.current);
     toastTimer.current = window.setTimeout(() => setToast(null), 4500);
+  }, []);
+
+  /** 把新发现的冲突并进弹窗列表（同一条连接只留一份，避免重复行） */
+  const pushConflicts = useCallback((list: Conflict[]) => {
+    if (!list.length) return;
+    setConflicts((prev) => {
+      const seen = new Set((prev ?? []).map((c) => c.id));
+      const add = list.filter((c) => !seen.has(c.id));
+      return add.length ? [...(prev ?? []), ...add] : prev;
+    });
   }, []);
 
   const refreshEnv = useCallback(() => {
@@ -111,6 +145,12 @@ export default function App() {
     api
       .lockState()
       .then((s) => setLocked(s.locked))
+      .catch(() => undefined);
+    // 开机自动挂载时盘符被占的连接不会挂上，后端在 2 秒后才动手，
+    // 事件有可能赶在前端订阅之前，所以这里再主动问一遍
+    api
+      .pendingConflicts()
+      .then((list) => pushConflicts(list))
       .catch(() => undefined);
     // 注意：这里不再主动取「发送到」请求。请求的归属是那个独立小窗，
     // 主窗口也去取就会在小窗打开前把请求抢走，变成主界面弹框。
@@ -167,6 +207,9 @@ export default function App() {
     events
       .onLockChanged((isLocked) => setLocked(isLocked))
       .then((un) => unlisteners.push(un));
+
+    // 挂载时位置被占：后端不自动改盘符，把冲突丢过来让用户自己挑
+    events.onTargetConflicts((list) => pushConflicts(list)).then((un) => unlisteners.push(un));
 
     // 注意：这里**不**监听 visibilitychange。WebView2 有窗口遮挡检测——
     // 被别的窗口完全盖住时页面也会变成 hidden，那样切个资源管理器就会被锁上，
@@ -284,7 +327,10 @@ export default function App() {
       await api.mount(c.id);
       notify("ok", t("toast.mounted", { name: c.name, target: c.target }));
     } catch (e) {
-      notify("bad", String(e));
+      // 位置被占不是「失败」，是等用户挑个新位置 —— 直接开弹窗，别只弹一条红字
+      const cf = parseConflict(e);
+      if (cf) pushConflicts(cf);
+      else notify("bad", String(e));
     } finally {
       setBusy("");
       await refresh();
@@ -805,6 +851,20 @@ export default function App() {
           t={t}
           onClose={() => setSendReq(null)}
           notify={notify}
+        />
+      )}
+
+      {/* 位置被占：多条合并成一个弹窗。锁屏期间先存着，解锁后再弹 */}
+      {!locked && !!conflicts?.length && (
+        <ConflictDialog
+          conflicts={conflicts}
+          t={t}
+          notify={notify}
+          onClose={() => setConflicts(null)}
+          onResolved={() => {
+            setConflicts(null);
+            void refresh();
+          }}
         />
       )}
 
