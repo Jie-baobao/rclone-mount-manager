@@ -270,6 +270,8 @@ export interface LockState {
   on_minimize: boolean;
   /** 锁定时卸载挂载盘 */
   on_unmount: boolean;
+  /** 此刻挂着几条连接（锁屏副标题按它决定要不要提「挂载操作已暂停」） */
+  mounted: number;
 }
 
 /** 「发送到」请求：资源管理器点菜单时传进来的目标盘符和文件 */
@@ -409,9 +411,9 @@ export const events = {
     isMock()
       ? mockListen()
       : listen<Array<[string, string]>>("mount-target-migrated", (e) => cb(e.payload)),
-  /** 锁屏状态变化：true=已锁定（显示锁屏），false=已解锁 */
-  onLockChanged: (cb: (locked: boolean) => void): Promise<UnlistenFn> =>
-    isMock() ? mockListen() : listen<boolean>("lock-changed", (e) => cb(e.payload)),
+  /** 锁屏状态变化：payload 是完整快照（含 locked 与当前挂载数） */
+  onLockChanged: (cb: (s: LockState) => void): Promise<UnlistenFn> =>
+    isMock() ? mockListen() : listen<LockState>("lock-changed", (e) => cb(e.payload)),
   /** 挂载时发现位置被占：列表可能一次带好几条，前端合并成一个弹窗 */
   onTargetConflicts: (cb: (list: Conflict[]) => void): Promise<UnlistenFn> =>
     isMock() ? mockListen() : listen<Conflict[]>("target-conflicts", (e) => cb(e.payload)),

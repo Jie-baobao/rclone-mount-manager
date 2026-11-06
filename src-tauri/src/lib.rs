@@ -1092,6 +1092,10 @@ struct LockState {
     on_minimize: bool,
     /// 锁定时卸载挂载盘（开关状态，跟随设置）
     on_unmount: bool,
+    /// 此刻挂着几条连接。锁屏上的副标题按它分两句：
+    /// 一条都没挂（刚开机 / 勾了锁定时卸载）才说「挂载操作已暂停」，
+    /// 已经挂着盘的时候说这句会让人以为自己的盘被卸了。
+    mounted: usize,
 }
 
 fn lock_snapshot(app: &AppHandle, state: &AppState) -> LockState {
@@ -1102,7 +1106,14 @@ fn lock_snapshot(app: &AppHandle, state: &AppState) -> LockState {
         on_startup: s.lock_on_startup,
         on_minimize: s.lock_on_minimize,
         on_unmount: s.lock_unmount,
+        mounted: state.sessions.lock().unwrap().len(),
     }
+}
+
+/// 广播锁定状态。payload 给整份快照而不是一个 bool：锁屏副标题要看「现在挂着几条」，
+/// 而前端自己再问一次会读到中间态（比如卸载刚做完、锁定信号早就发出去了）。
+fn emit_lock(app: &AppHandle, state: &AppState) {
+    let _ = app.emit("lock-changed", lock_snapshot(app, state));
 }
 
 #[tauri::command]
@@ -1120,10 +1131,11 @@ fn lock_if_configured(app: &AppHandle) {
     let s = settings::load(app);
     if s.lock_hash.is_some() && s.lock_on_minimize {
         state.locked.store(true, Ordering::SeqCst);
-        let _ = app.emit("lock-changed", true);
+        // 先卸再广播：广播里带着「现在挂着几条」，卸完才和用户看到的界面一致
         if s.lock_unmount {
             unmount_for_lock(app);
         }
+        emit_lock(app, &state);
     }
 }
 
@@ -1211,7 +1223,7 @@ fn lock_set_password(
     }
     settings::save(&app, &s)?;
     state.locked.store(false, Ordering::SeqCst);
-    let _ = app.emit("lock-changed", false);
+    emit_lock(&app, &state);
     remount_after_unlock(&app);
     flush_sendto(&app);
     Ok(lock_snapshot(&app, &state))
@@ -1232,7 +1244,7 @@ fn lock_verify(
         return Ok(false);
     }
     state.locked.store(false, Ordering::SeqCst);
-    let _ = app.emit("lock-changed", false);
+    emit_lock(&app, &state);
     // 锁屏时卸掉的盘先挂回来，再放「发送到」的请求——不然请求的目标盘还不存在
     remount_after_unlock(&app);
     flush_sendto(&app);

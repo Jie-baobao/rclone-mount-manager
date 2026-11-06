@@ -11,9 +11,12 @@ import { api } from "./api";
  */
 export default function LockScreen({
   t,
+  mounted,
   onUnlocked,
 }: {
   t: T;
+  /** 锁屏那一刻挂着几条连接：挂着盘的时候不能说「挂载操作已暂停」 */
+  mounted: number;
   onUnlocked: () => void;
 }) {
   const [password, setPassword] = useState("");
@@ -64,7 +67,9 @@ export default function LockScreen({
           🔒
         </div>
         <h2>{t("lock.title")}</h2>
-        <p className="muted">{t("lock.hint")}</p>
+        {/* 一条都没挂（刚开机、或勾了「锁定时卸载」）才提「挂载操作已暂停」；
+            从托盘唤回时盘还好端端挂着，说这句会让人以为盘被卸了 */}
+        <p className="muted">{mounted > 0 ? t("lock.hint") : t("lock.hintPaused")}</p>
         <input
           className="ctl"
           type="password"

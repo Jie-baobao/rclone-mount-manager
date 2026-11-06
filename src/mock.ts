@@ -160,8 +160,14 @@ const lockMock = {
   on_startup: false,
   on_minimize: false,
   on_unmount: false,
+  mounted: 0,
 };
 let mockPassword = "";
+
+/** 锁屏副标题要看「现在挂着几条」，预览里直接数一遍假状态 */
+function mockMounted(): number {
+  return Object.values(states).filter((s) => s.mounted).length;
+}
 
 function reply(cmd: string, args?: Record<string, unknown>): unknown {
   switch (cmd) {
@@ -290,7 +296,7 @@ function reply(cmd: string, args?: Record<string, unknown>): unknown {
       return args?.s;
     }
     case "lock_state":
-      return { ...lockMock, has_password: mockPassword !== "" };
+      return { ...lockMock, mounted: mockMounted(), has_password: mockPassword !== "" };
     case "lock_set_password": {
       const cur = (args?.current as string | null) ?? null;
       const next = (args?.next as string) ?? "";
@@ -311,6 +317,7 @@ function reply(cmd: string, args?: Record<string, unknown>): unknown {
         on_startup: lockMock.on_startup,
         on_minimize: lockMock.on_minimize,
         on_unmount: lockMock.on_unmount,
+        mounted: mockMounted(),
       };
     }
     case "lock_verify": {
@@ -324,7 +331,7 @@ function reply(cmd: string, args?: Record<string, unknown>): unknown {
       if (mockPassword !== "" && lockMock.on_minimize) {
         lockMock.locked = true;
       }
-      return { ...lockMock, has_password: mockPassword !== "" };
+      return { ...lockMock, mounted: mockMounted(), has_password: mockPassword !== "" };
     }
     case "export_connections":
       // 浏览器预览下带口令就返回一个假的加密信封，方便看导入弹口令的交互

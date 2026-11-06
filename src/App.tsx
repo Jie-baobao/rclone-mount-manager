@@ -82,6 +82,8 @@ export default function App() {
    * 是否落锁完全由后端裁决（lock_now 内部按设置核验），前端只负责显示。
    */
   const [locked, setLocked] = useState(false);
+  /** 锁屏那一刻挂着几条连接：决定副标题要不要说「挂载操作已暂停」 */
+  const [lockMounted, setLockMounted] = useState(0);
   /**
    * 挂载时发现位置被占用（U 盘、别的软件、或另一条连接配了同一个位置）。
    * 后端不做自动顺延——盘符一改，桌面快捷方式和脚本里的 Z: 就全废了——
@@ -144,7 +146,10 @@ export default function App() {
     // 锁定状态以后端为准：「启动时先解锁」开着的话，启动即锁定；收进托盘前也可能已落锁
     api
       .lockState()
-      .then((s) => setLocked(s.locked))
+      .then((s) => {
+        setLocked(s.locked);
+        setLockMounted(s.mounted);
+      })
       .catch(() => undefined);
     // 开机自动挂载时盘符被占的连接不会挂上，后端在 2 秒后才动手，
     // 事件有可能赶在前端订阅之前，所以这里再主动问一遍
@@ -203,9 +208,13 @@ export default function App() {
       .onSendtoRequest((req) => setSendReq(req))
       .then((un) => unlisteners.push(un));
 
-    // 锁屏状态变化：后端置锁（收托盘 / 最小化）或解锁（密码验证通过）都广播到这里
+    // 锁屏状态变化：后端置锁（收托盘 / 最小化）或解锁（密码验证通过）都广播到这里。
+    // payload 带整份快照——副标题要用「挂着几条」来选文案，单独再问一次会读到中间态
     events
-      .onLockChanged((isLocked) => setLocked(isLocked))
+      .onLockChanged((s) => {
+        setLocked(s.locked);
+        setLockMounted(s.mounted);
+      })
       .then((un) => unlisteners.push(un));
 
     // 挂载时位置被占：后端不自动改盘符，把冲突丢过来让用户自己挑
@@ -871,7 +880,9 @@ export default function App() {
       {toast && <div className={`toast ${toast.kind}`}>{toast.text}</div>}
 
       {/* 锁屏压在一切之上：主界面、设置弹窗、发送到确认窗全部被盖住 */}
-      {locked && <LockScreen t={t} onUnlocked={() => setLocked(false)} />}
+      {locked && (
+        <LockScreen t={t} mounted={lockMounted} onUnlocked={() => setLocked(false)} />
+      )}
     </div>
   );
 }
