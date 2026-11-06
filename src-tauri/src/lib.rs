@@ -1079,7 +1079,8 @@ fn save_settings(app: AppHandle, mut s: Settings) -> Result<Settings, String> {
 // ---------------------------------------------------------------- 锁屏 / 密码保护
 
 /// 给前端的锁屏状态快照
-#[derive(serde::Serialize)]
+/// （Clone 是 emit 的要求——事件 payload 要能被克隆分发到每个窗口）
+#[derive(serde::Serialize, Clone)]
 #[serde(rename_all = "snake_case")]
 struct LockState {
     /// 当前是否处于锁定状态（界面被锁屏遮罩盖住）
