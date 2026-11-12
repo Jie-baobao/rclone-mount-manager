@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   api,
   fmtBytes,
@@ -7,6 +7,7 @@ import {
   type ProbeMode,
   type Stats,
   type MountState,
+  type HistoryPoint,
 } from "./api";
 import TrafficBar from "./TrafficBar";
 import type { T } from "./i18n";
@@ -43,6 +44,7 @@ function fmtTick(ms: number, step: number): string {
 
 /** 时间跨度：300 秒 → 5m，90 秒 → 90s */
 function fmtSpan(secs: number): string {
+  if (secs >= 86_400) return `${(secs / 86_400).toFixed(1)}d`;
   if (secs >= 3600) return `${(secs / 3600).toFixed(1)}h`;
   if (secs >= 60) return `${Math.round(secs / 60)}m`;
   return `${Math.round(secs)}s`;
@@ -58,11 +60,14 @@ function LatencyChart({
   threshold,
   intervalSecs,
   t,
+  max = WINDOW,
 }: {
   data: number[];
   threshold: number;
   intervalSecs: number;
   t: T;
+  /** 最多画多少个点：今天的实时曲线用 WINDOW，7 天视图用后端降采样后的条数 */
+  max?: number;
 }) {
   const W = 560;
   const H = 176;
@@ -71,7 +76,7 @@ function LatencyChart({
   const plotW = W - PAD.l - PAD.r;
   const plotH = H - PAD.t - PAD.b;
 
-  const pts = data.slice(-WINDOW);
+  const pts = data.slice(-max);
   const values = pts.filter((v) => v > 0);
   const peakMs = values.length ? Math.max(...values) / 1000 : 0;
   const step = pickStep(peakMs);
@@ -240,6 +245,39 @@ export default function StatsPanel({
   const max = good.length ? Math.max(...good) : 0;
   const avg = good.length ? Math.round(good.reduce((a, b) => a + b, 0) / good.length) : 0;
 
+  // 「今天 / 7 天」：今天用内存里的实时窗口（5 秒采样），7 天读后端落盘的历史
+  const [range, setRange] = useState<"today" | "7d">("today");
+  const [span, setSpan] = useState<HistoryPoint[] | null>(null);
+  const [spanLoading, setSpanLoading] = useState(false);
+
+  const loadSpan = useCallback(async (id: string) => {
+    setSpanLoading(true);
+    try {
+      setSpan(await api.latencyHistory(id, 168));
+    } catch {
+      setSpan([]);
+    } finally {
+      setSpanLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (range === "7d" && state?.id) void loadSpan(state.id);
+  }, [range, state?.id, loadSpan]);
+
+  const spanUs = (span ?? []).map((p) => p.us);
+  const spanGood = spanUs.filter((v) => v > 0);
+  const spanMin = spanGood.length ? Math.min(...spanGood) : 0;
+  const spanMax = spanGood.length ? Math.max(...spanGood) : 0;
+  const spanAvg = spanGood.length
+    ? Math.round(spanGood.reduce((a, b) => a + b, 0) / spanGood.length)
+    : 0;
+  // 后端降采样后点与点之间的平均间隔（秒），给折线的 X 轴刻度用
+  const spanSecs =
+    span && span.length > 1
+      ? Math.max(1, Math.round((span[span.length - 1].t - span[0].t) / (span.length - 1)))
+      : intervalSecs;
+
   // 把这次挂载的计数清零：想单独量一次拷贝花了多少流量时用
   async function resetFlow() {
     if (!state?.id) return;
@@ -307,6 +345,27 @@ export default function StatsPanel({
         </div>
       </div>
 
+      {/* 正在传输的文件：rclone 的 transferring 只包含「写远端」，也就是上传 */}
+      {(s?.transferring?.length ?? 0) > 0 && (
+        <div className="xfer">
+          <div className="xfer-head">{t("stats.transferring", { n: s?.transferring?.length ?? 0 })}</div>
+          {s!.transferring.map((it, i) => (
+            <div className="xfer-row" key={`${it.name}-${i}`}>
+              <span className="xfer-name" title={it.name}>
+                {it.name}
+              </span>
+              <span className="xfer-bar">
+                <i style={{ width: `${it.percentage}%` }} />
+              </span>
+              <span className="xfer-meta mono">
+                {it.size ? `${fmtBytes(it.bytes)} / ${fmtBytes(it.size)}` : fmtBytes(it.bytes)}
+                {it.speed > 0 ? ` · ${fmtSpeed(it.speed)}` : ""}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+
       {/* 单条连接的上传/下载合计（今日 + 累计），数据来自后端落盘账本 */}
       <TrafficBar
         todayUp={s?.today_up ?? 0}
@@ -318,8 +377,28 @@ export default function StatsPanel({
 
       <div className="spark-wrap">
         <div className="spark-head">
-          <span>{t(mode === "light" ? "stats.historyTcp" : "stats.history", { n: window.length || WINDOW })}</span>
+          <span>
+            {t(mode === "light" ? "stats.historyTcp" : "stats.history", {
+              n: range === "7d" ? spanUs.length : window.length || WINDOW,
+            })}
+          </span>
           <div className="spark-tools">
+            {tracksLatency && (
+              <div className="seg" role="group" aria-label={t("stats.rangeTitle")}>
+                <button
+                  className={`seg-btn ${range === "today" ? "active" : ""}`}
+                  onClick={() => setRange("today")}
+                >
+                  {t("stats.rangeToday")}
+                </button>
+                <button
+                  className={`seg-btn ${range === "7d" ? "active" : ""}`}
+                  onClick={() => setRange("7d")}
+                >
+                  {t("stats.range7d")}
+                </button>
+              </div>
+            )}
             {tracksLatency && mode === "full" && (
               <span className="muted small">{t("stats.threshold", { v: threshold })}</span>
             )}
@@ -340,20 +419,46 @@ export default function StatsPanel({
             )}
           </div>
         </div>
-        {tracksLatency && window.length >= 2 ? (
+        {!tracksLatency ? (
+          <p className="muted small">{t("stats.probeNa")}</p>
+        ) : range === "today" ? (
+          window.length >= 2 ? (
+            <>
+              <LatencyChart data={window} threshold={threshold} intervalSecs={intervalSecs} t={t} />
+              <p className="chart-legend muted small">
+                {t("stats.range", {
+                  min: fmtLatency(min),
+                  avg: fmtLatency(avg),
+                  max: fmtLatency(max),
+                })}
+              </p>
+              {mode === "light" && <p className="chart-legend muted small">{t("stats.tcpNote")}</p>}
+            </>
+          ) : (
+            <p className="muted small">{t("stats.noHistory")}</p>
+          )
+        ) : spanLoading ? (
+          <p className="muted small">{t("stats.loading")}</p>
+        ) : spanGood.length >= 2 ? (
           <>
-            <LatencyChart data={window} threshold={threshold} intervalSecs={intervalSecs} t={t} />
+            <LatencyChart
+              data={spanUs}
+              threshold={threshold}
+              intervalSecs={spanSecs}
+              max={240}
+              t={t}
+            />
             <p className="chart-legend muted small">
-              {t("stats.range", {
-                min: fmtLatency(min),
-                avg: fmtLatency(avg),
-                max: fmtLatency(max),
+              {t("stats.spanRange", {
+                min: fmtLatency(spanMin),
+                avg: fmtLatency(spanAvg),
+                max: fmtLatency(spanMax),
               })}
             </p>
-            {mode === "light" && <p className="chart-legend muted small">{t("stats.tcpNote")}</p>}
+            <p className="chart-legend muted small">{t("stats.spanNote")}</p>
           </>
         ) : (
-          <p className="muted small">{tracksLatency ? t("stats.noHistory") : t("stats.probeNa")}</p>
+          <p className="muted small">{t("stats.noHistory")}</p>
         )}
       </div>
     </details>

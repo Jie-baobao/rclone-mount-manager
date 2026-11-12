@@ -2,6 +2,8 @@ import { useEffect, useState } from "react";
 import Modal from "./Modal";
 import {
   api,
+  events,
+  fmtBytes,
   fmtLatency,
   isWindows,
   type Connection,
@@ -72,6 +74,19 @@ export default function SettingsPanel({
   const [impPending, setImpPending] = useState<string | null>(null);
   const [impPass, setImpPass] = useState("");
   const [diagCopied, setDiagCopied] = useState(false);
+  /** 粘贴导入：换电脑时不用传文件，微信发一段文本给自己就行 */
+  const [pasteOpen, setPasteOpen] = useState(false);
+  const [pasteText, setPasteText] = useState("");
+  /** 管理器更新包下载进度（Windows 装完会自己退出） */
+  const [updProg, setUpdProg] = useState<{ received: number; total: number } | null>(null);
+
+  useEffect(() => {
+    let un: (() => void) | undefined;
+    void events.onUpdateProgress((p) => setUpdProg({ received: p.received, total: p.total })).then(
+      (f) => (un = f)
+    );
+    return () => un?.();
+  }, []);
   /**
    * 开机自启动的真实状态自己拉，不走 cfg。
    *
@@ -86,6 +101,9 @@ export default function SettingsPanel({
       .getAutostart()
       .then(setAutostartState)
       .catch(() => setAutostartState(false));
+    // 顺手查一次更新：新版能一键装之后，让用户主动点「检查更新」太被动了
+    void check();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   /**
@@ -189,6 +207,40 @@ export default function SettingsPanel({
       onRefreshEnv();
       await check();
     } catch (e) {
+      notify("bad", String(e));
+    } finally {
+      setWorking("");
+    }
+  }
+
+  /** 导出成一段文本直接进剪贴板（加密与否跟文件导出一致：传了口令就加密） */
+  async function copyExport() {
+    setExporting(true);
+    try {
+      const text = await api.exportConnections(expPass || undefined);
+      const ok = await copyText(text);
+      notify(ok ? "ok" : "bad", ok ? t("st.copyTextOk") : t("st.copyTextFail"));
+      if (ok) {
+        setExpOpen(false);
+        setExpPass("");
+      }
+    } catch (e) {
+      notify("bad", String(e));
+    } finally {
+      setExporting(false);
+    }
+  }
+
+  /** 下载并安装管理器新版本 */
+  async function doInstallApp(version: string) {
+    if (!window.confirm(t("st.installAppConfirm"))) return;
+    setWorking("app");
+    setUpdProg({ received: 0, total: 0 });
+    try {
+      const path = await api.installAppUpdate(version);
+      notify("ok", t("st.installAppStarted", { path }));
+    } catch (e) {
+      setUpdProg(null);
       notify("bad", String(e));
     } finally {
       setWorking("");
@@ -609,12 +661,22 @@ export default function SettingsPanel({
                 {it.latest ? ` / ${t("st.newest")} ${it.latest}` : ""}
                 {note ? ` (${note})` : ""}
               </span>
-              {it.has_update && it.name === "rclone" && (
+              {it.has_update && it.kind === "rclone" && (
                 <button className="btn primary small" disabled={!!working} onClick={() => doInstallRclone(it.latest)}>
                   {working === "rclone" ? t("st.updating") : t("st.updateNow")}
                 </button>
               )}
-              {it.has_update && it.name !== "rclone" && (
+              {it.has_update && it.kind === "app" && (
+                <button
+                  className="btn primary small"
+                  disabled={!!working}
+                  title={t("st.installAppTip")}
+                  onClick={() => void doInstallApp(it.latest)}
+                >
+                  {working === "app" ? t("st.installingApp") : t("st.updateNow")}
+                </button>
+              )}
+              {it.has_update && it.kind === "driver" && (
                 <button className="btn ghost small" onClick={() => api.openUrl(it.url)}>
                   {t("st.download")}
                 </button>
@@ -624,6 +686,16 @@ export default function SettingsPanel({
           );
         })}
       </div>
+      {updProg && (
+        <p className="tips">
+          {updProg.total > 0
+            ? t("st.appDownloading", {
+                got: fmtBytes(updProg.received),
+                total: fmtBytes(updProg.total),
+              })
+            : t("st.appDownloadingNoSize", { got: fmtBytes(updProg.received) })}
+        </p>
+      )}
       <p className="tips">{t(win ? "st.depsTip" : "st.depsTipUnix")}</p>
 
       {/* 数据 */}
@@ -645,6 +717,12 @@ export default function SettingsPanel({
             }}
           />
         </label>
+        <button className="btn ghost" disabled={exporting} onClick={() => void copyExport()}>
+          {t("st.copyText")}
+        </button>
+        <button className="btn ghost" onClick={() => setPasteOpen((v) => !v)}>
+          {t("st.pasteImport")}
+        </button>
         <button className="btn ghost" onClick={() => void copyDiag()}>
           {diagCopied ? t("st.diagCopied") : t("st.diagCopy")}
         </button>
@@ -674,6 +752,38 @@ export default function SettingsPanel({
               onClick={() => {
                 setExpOpen(false);
                 setExpPass("");
+              }}
+            >
+              {t("cf.cancel")}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* 粘贴导入：换电脑时不用传文件，微信发一段文本给自己就行 */}
+      {pasteOpen && (
+        <div className="pass-box">
+          <p className="tips">{t("st.pasteNote")}</p>
+          <textarea
+            className="ctl paste-area"
+            value={pasteText}
+            onChange={(e) => setPasteText(e.target.value)}
+            placeholder={'{ "app": "rclone-mount-manager", ... }'}
+            rows={5}
+          />
+          <div className="pass-row">
+            <button
+              className="btn primary small"
+              disabled={!pasteText.trim() || importing}
+              onClick={() => void runImport(pasteText.trim())}
+            >
+              {t("st.impGo")}
+            </button>
+            <button
+              className="btn ghost small"
+              onClick={() => {
+                setPasteOpen(false);
+                setPasteText("");
               }}
             >
               {t("cf.cancel")}

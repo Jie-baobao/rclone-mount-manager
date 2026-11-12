@@ -11,6 +11,7 @@ import SendToDialog from "./SendToDialog";
 import {
   api,
   events,
+  fmtBytes,
   fmtLatency,
   healthOf,
   healthTip,
@@ -20,6 +21,7 @@ import {
   formatUptimeT,
   type Connection,
   type Conflict,
+  type DiskUsage,
   type EnvInfo,
   type MountState,
   type SendRequest,
@@ -28,6 +30,7 @@ import {
   type TrafficSummary,
 } from "./api";
 import { makeT, resolveLanguage, type T } from "./i18n";
+import { explainError } from "./errors";
 
 interface Toast {
   kind: "ok" | "bad";
@@ -259,6 +262,25 @@ export default function App() {
   const currentState = current ? states[current.id] : undefined;
   const mountedCount = useMemo(() => Object.values(states).filter((s) => s.mounted).length, [states]);
 
+  // 远程容量：切到详情页时查一次（后端有 60 秒缓存，来回点不会反复走网络）。
+  // 刚挂上／刚卸下时重查，避免显示上一次的数字。
+  const [usage, setUsage] = useState<DiskUsage | null>(null);
+  useEffect(() => {
+    if (!current) {
+      setUsage(null);
+      return;
+    }
+    let alive = true;
+    api
+      .diskUsage(current.id)
+      .then((u) => alive && setUsage(u))
+      .catch(() => alive && setUsage(null));
+    return () => {
+      alive = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [current?.id, currentState?.mounted]);
+
   const loadLog = useCallback(async (id: string) => {
     try {
       setLog(await api.readLog(id));
@@ -378,6 +400,17 @@ export default function App() {
       notify("bad", String(e));
     } finally {
       await refresh();
+    }
+  }
+
+  /** 整组挂载 / 卸载：逐条调用，遇到位置冲突照常弹窗 */
+  async function handleGroup(group: string, mountIt: boolean) {
+    const list = conns.filter((c) => c.group.trim() === group);
+    for (const c of list) {
+      const isMounted = !!states[c.id]?.mounted;
+      if (mountIt === isMounted) continue;
+      if (mountIt) await handleMount(c);
+      else await handleUnmount(c);
     }
   }
 
@@ -528,7 +561,33 @@ export default function App() {
               sorted.findIndex((p) => p.group.trim() === c.group.trim()) === i;
             return (
               <Fragment key={c.id}>
-                {showGroup && <li className="group-head">{c.group}</li>}
+                {showGroup && (
+                  <li className="group-head">
+                    <span className="group-name">{c.group}</span>
+                    <span className="group-acts">
+                      <button
+                        className="group-act"
+                        title={t("app.groupMountTip")}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          void handleGroup(c.group.trim(), true);
+                        }}
+                      >
+                        {t("app.groupMount")}
+                      </button>
+                      <button
+                        className="group-act"
+                        title={t("app.groupUnmountTip")}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          void handleGroup(c.group.trim(), false);
+                        }}
+                      >
+                        {t("app.groupUnmount")}
+                      </button>
+                    </span>
+                  </li>
+                )}
                 <li
                   className={`conn ${selected === c.id ? "active" : ""}`}
                   // 再点一次已选中的连接就取消选中，回到首页概览
@@ -653,6 +712,9 @@ export default function App() {
             {currentState?.last_error && !currentState.mounted && (
               <div className="alert">
                 <strong>{t("app.lastFail")}</strong>
+                {explainError(currentState.last_error, t) && (
+                  <p className="alert-hint">{explainError(currentState.last_error, t)}</p>
+                )}
                 <pre>{currentState.last_error}</pre>
               </div>
             )}
@@ -690,6 +752,26 @@ export default function App() {
                   </span>
                 </div>
               </div>
+
+              {usage?.supported && usage.total > 0 && (
+                <div className="cap">
+                  <div className="cap-head">
+                    <span>{t("app.capacity")}</span>
+                    <span className="muted small mono">
+                      {t("app.capFree")} {fmtBytes(usage.free)}
+                    </span>
+                  </div>
+                  <div className="cap-bar" role="img" aria-label={t("app.capacity")}>
+                    <i style={{ width: `${Math.min(100, Math.round((usage.used / usage.total) * 100))}%` }} />
+                  </div>
+                  <div className="cap-legend muted small">
+                    {t("app.capDetail", {
+                      used: fmtBytes(usage.used),
+                      total: fmtBytes(usage.total),
+                    })}
+                  </div>
+                </div>
+              )}
 
               <div className="actions">
                 {currentState?.mounted ? (

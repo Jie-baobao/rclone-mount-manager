@@ -159,6 +159,10 @@ body {
 
 /* 按分组排序时压在组内第一条上方的组名标题 */
 .group-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
   padding: 10px 9px 3px;
   font-size: 11px;
   font-weight: 700;
@@ -167,6 +171,34 @@ body {
   opacity: 0.85;
   border-bottom: 1px dashed var(--border);
   margin-bottom: 2px;
+}
+
+/* 「挂载本组 / 卸载本组」：平时低调，鼠标移到组上才明显 */
+.group-acts {
+  display: flex;
+  gap: 2px;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+
+.group-head:hover .group-acts {
+  opacity: 1;
+}
+
+.group-act {
+  padding: 1px 5px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 10.5px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.group-act:hover {
+  color: var(--text);
+  border-color: var(--accent);
 }
 
 .conn-list {
@@ -1907,4 +1939,135 @@ input::-webkit-credentials-auto-fill-button {
 
 .conflict-pick .ctl {
   width: 150px;
+}
+
+/* ------------------------------ 容量条 */
+.cap {
+  margin: 10px 0 4px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--panel-2, transparent);
+}
+
+.cap-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11.5px;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+
+.cap-bar {
+  height: 6px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--text) 9%, transparent);
+  overflow: hidden;
+}
+
+.cap-bar > i {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+  background: linear-gradient(90deg, var(--accent), color-mix(in srgb, var(--accent) 55%, var(--warn)));
+  transition: width 0.3s ease;
+}
+
+.cap-legend {
+  margin-top: 5px;
+}
+
+/* ------------------------------ 传输中的文件 */
+.xfer {
+  margin: 10px 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 8px 10px;
+}
+
+.xfer-head {
+  font-size: 11px;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+
+.xfer-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 90px minmax(0, auto);
+  align-items: center;
+  gap: 8px;
+  padding: 3px 0;
+  font-size: 12px;
+}
+
+.xfer-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.xfer-bar {
+  height: 4px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--text) 9%, transparent);
+  overflow: hidden;
+}
+
+.xfer-bar > i {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.3s ease;
+}
+
+.xfer-meta {
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+/* ------------------------------ 今天 / 7 天 切换 */
+.seg {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.seg-btn {
+  padding: 2px 8px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.seg-btn + .seg-btn {
+  border-left: 1px solid var(--border);
+}
+
+.seg-btn.active {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+/* 失败建议：比原始日志更靠前，先让人知道该改哪儿 */
+.alert-hint {
+  margin: 0 0 6px;
+  font-size: 12px;
+  color: var(--text);
+  line-height: 1.55;
+}
+
+/* 粘贴导入的文本框 */
+.paste-area {
+  width: 100%;
+  resize: vertical;
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 11.5px;
+  line-height: 1.5;
 }

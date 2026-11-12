@@ -137,6 +137,31 @@ export function fmtBytes(n: number): string {
  * 而且它是**挂载开始以来的累计值**，含重复读取、重试与预取，所以 total_bytes
  * 不等于「复制了多少文件」。想单独量一次拷贝，先点「清零重计」再操作。
  */
+/** 一条正在传输的文件 */
+export interface TransferItem {
+  name: string;
+  bytes: number;
+  size: number;
+  speed: number;
+  percentage: number;
+}
+
+/** 远程容量（rclone about）。supported=false 时界面整块隐藏 */
+export interface DiskUsage {
+  total: number;
+  used: number;
+  free: number;
+  supported: boolean;
+  note: string;
+  at: number;
+}
+
+/** 探测历史的一个点（us = 0 表示这次失败） */
+export interface HistoryPoint {
+  t: number;
+  us: number;
+}
+
 export interface Stats {
   speed_bps: number;
   peak_bps: number;
@@ -152,6 +177,8 @@ export interface Stats {
   /** 本次挂载的上下行字节（方向按「是否有活跃上传」推断，属近似口径） */
   up_bytes: number;
   down_bytes: number;
+  /** 正在传输的文件（rclone rc 的 transferring，最多 8 条） */
+  transferring: TransferItem[];
   /** 今天 / 累计的上下行（落盘账本，重启后仍在） */
   today_up: number;
   today_down: number;
@@ -227,6 +254,8 @@ export interface EnvInfo {
 }
 
 export interface VersionInfo {
+  /** app / rclone / driver —— 界面按它决定给什么按钮 */
+  kind: string;
   name: string;
   current: string;
   latest: string;
@@ -347,6 +376,12 @@ export const api = {
   setAutostart: (enable: boolean) => call<void>("set_autostart", { enable }),
   test: (input: ConnectionInput) => call<DiagResult>("test_connection", { input }),
   checkUpdates: () => call<UpdateReport>("check_updates"),
+  /** 下载并安装管理器自身的新版本（Windows 装完会自己退出） */
+  installAppUpdate: (version: string) => call<string>("install_app_update", { version }),
+  /** 远程剩余容量（60 秒缓存） */
+  diskUsage: (id: string) => call<DiskUsage>("disk_usage", { id }),
+  /** 探测历史，hours=24 为今天、168 为 7 天 */
+  latencyHistory: (id: string, hours: number) => call<HistoryPoint[]>("latency_history", { id, hours }),
   installRclone: (version: string) => call<string>("install_rclone", { version }),
   installWinfsp: () => call<string>("install_winfsp"),
   openUrl: (url: string) => call<void>("open_url", { url }),
@@ -417,7 +452,17 @@ export const events = {
   /** 挂载时发现位置被占：列表可能一次带好几条，前端合并成一个弹窗 */
   onTargetConflicts: (cb: (list: Conflict[]) => void): Promise<UnlistenFn> =>
     isMock() ? mockListen() : listen<Conflict[]>("target-conflicts", (e) => cb(e.payload)),
+  /** 管理器自身更新包的下载进度 */
+  onUpdateProgress: (cb: (p: UpdateProgress) => void): Promise<UnlistenFn> =>
+    isMock() ? mockListen() : listen<UpdateProgress>("update-progress", (e) => cb(e.payload)),
 };
+
+/** 更新包下载进度：done=true 表示下载完成、正在启动安装 */
+export interface UpdateProgress {
+  received: number;
+  total: number;
+  done?: boolean;
+}
 
 /** 后端推送的通知请求 */
 export interface NotifyPayload {

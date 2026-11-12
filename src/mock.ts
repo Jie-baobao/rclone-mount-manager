@@ -232,6 +232,10 @@ function reply(cmd: string, args?: Record<string, unknown>): unknown {
           360, 420, 380, 0, 310, 460, 390, 1800, 340, 410, 350, 300, 390, 370, 0, 440, 360, 400, 380,
           350, 330, 410, 390, 380,
         ],
+        transferring: [
+          { name: "电影/4K 演示片.mkv", bytes: 734_003_200, size: 2_147_483_648, speed: 1_843_200, percentage: 34 },
+          { name: "照片/2026-11/IMG_2041.jpg", bytes: 3_145_728, size: 3_145_728, speed: 0, percentage: 100 },
+        ],
         up_bytes: 118_111_232,
         down_bytes: 615_891_968,
         today_up: 268_435_456,
@@ -239,6 +243,27 @@ function reply(cmd: string, args?: Record<string, unknown>): unknown {
         total_up: 8_589_934_592,
         total_down: 42_949_672_960,
       } satisfies Stats;
+    case "disk_usage":
+      return {
+        total: 3_999_750_651_904,
+        used: 1_288_490_188_800,
+        free: 2_711_260_463_104,
+        supported: true,
+        note: "",
+        at: Math.floor(Date.now() / 1000),
+      };
+    case "latency_history": {
+      // 一天 96 个点，白天高一点、夜里平稳，掺几个失败点
+      const now = Math.floor(Date.now() / 1000);
+      const hours = Number((args as { hours?: number })?.hours ?? 24);
+      const n = Math.min(240, Math.max(12, Math.round(hours * 4)));
+      return Array.from({ length: n }, (_, i) => ({
+        t: now - (n - i) * ((hours * 3600) / n),
+        us: i % 37 === 0 ? 0 : 320_000 + ((i * 7_919) % 260_000),
+      }));
+    }
+    case "install_app_update":
+      return "已开始安装";
     case "traffic_summary":
       return {
         today_up: 402_653_184,
@@ -344,14 +369,17 @@ function reply(cmd: string, args?: Record<string, unknown>): unknown {
       return {
         items: [
           {
+            kind: "app",
             name: "管理器",
-            current: "0.2.0",
-            latest: "0.2.0",
-            has_update: false,
+            // 演示「有新版」时界面长什么样：本地当作旧版本
+            current: "0.3.12",
+            latest: "0.3.13",
+            has_update: true,
             url: "https://github.com/Jie-baobao/rclone-mount-manager/releases",
             note: "",
           },
           {
+            kind: "rclone",
             name: "rclone",
             current: "1.75.2",
             latest: "1.75.2",
@@ -360,6 +388,7 @@ function reply(cmd: string, args?: Record<string, unknown>): unknown {
             note: "",
           },
           {
+            kind: "driver",
             name: "WinFsp",
             current: "2.0.23075",
             latest: "2.1",
