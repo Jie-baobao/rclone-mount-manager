@@ -284,7 +284,9 @@ fn to_connection(input: &ConnectionInput, existing: Option<&Connection>) -> Conn
         protocol: input.protocol,
         host: input.host.trim().to_string(),
         port,
-        path: input.path.trim().trim_matches('/').to_string(),
+        // SMB 共享名 / FTP·SFTP·S3 子路径：统一成正斜杠、去掉首尾斜杠，
+        // 之后由 rclone::remote_spec() 拼成 `remote:共享名/子目录`。
+        path: input.path.trim().replace('\\', "/").trim_matches('/').to_string(),
         user: input.user.trim().to_string(),
         target: normalize_target(&input.target),
         cache_dir: input.cache_dir.trim().to_string(),
@@ -1719,6 +1721,9 @@ fn sendto_window_close(window: tauri::Window) {
 /// 启动时自动挂载 + 意外退出的自动重连，都在这条线程里做。
 fn spawn_supervisor(app: AppHandle) {
     std::thread::spawn(move || {
+        // 老版本把 SMB 共享名写进了 conf 的 `path =`（无效键），启动先清一次，
+        // 免得升级上来的老连接报未知配置项。清错了也没关系：文件里有 .bak 备份。
+        let _ = rclone::migrate_legacy_conf(&app);
         // 启动阶段：等界面准备好再挂，避免和窗口初始化抢资源
         std::thread::sleep(Duration::from_secs(2));
         // 开机锁定（lock_on_startup）：密码没验证之前一个盘都不挂。

@@ -11,6 +11,70 @@ pub fn remote_name(id: &str) -> String {
     format!("rmm_{id}")
 }
 
+/// 拼出 `rclone mount` / `rclone lsd` 用的远程路径（`remote:sub/path`）。
+///
+/// - SMB：`rmm_x:共享名/子目录`（rclone 的 smb 后端**没有** `path` 配置项，
+///   共享名与子目录只能写在远程路径里）
+/// - FTP / SFTP：`rmm_x:子目录`
+/// - S3：`rmm_x:bucket/前缀`
+/// - WebDAV：`rmm_x:`（子路径已经在 conf 的 `url` 里拼好了，这里再拼会重复）
+pub fn remote_spec(conn: &Connection) -> String {
+    let base = remote_name(&conn.id);
+    if conn.protocol.is_webdav() {
+        return format!("{base}:");
+    }
+    // Windows 用户习惯用反斜杠写共享里的目录，rclone 只认正斜杠
+    let sub = conn.path.trim().replace('\\', "/");
+    let sub = sub.trim_matches('/');
+    if sub.is_empty() {
+        format!("{base}:")
+    } else {
+        format!("{base}:{sub}")
+    }
+}
+
+/// 老版本把共享名写进了 conf 的 `path = ...`（rclone 各后端都没有这个键），
+/// 升级后统一改成写进远程路径。这里把残留的清掉，避免 rclone 报未知配置项。
+pub fn migrate_legacy_conf(app: &AppHandle) -> Result<(), String> {
+    let conf_path = store::rclone_conf_path(app)?;
+    let Ok(existing) = fs::read_to_string(&conf_path) else {
+        return Ok(());
+    };
+    let mut out: Vec<String> = Vec::new();
+    let mut changed = false;
+    // 当前 section 的 type；只有 smb/ftp/sftp 需要处理
+    let mut kind = String::new();
+    for line in existing.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('[') && trimmed.ends_with(']') {
+            kind.clear();
+            out.push(line.to_string());
+            continue;
+        }
+        if let Some(rest) = trimmed.strip_prefix("type") {
+            if let Some(v) = rest.trim_start().strip_prefix('=') {
+                kind = v.trim().to_ascii_lowercase();
+            }
+            out.push(line.to_string());
+            continue;
+        }
+        let is_legacy_path = trimmed.starts_with("path")
+            && trimmed
+                .strip_prefix("path")
+                .map(|r| r.trim_start().starts_with('='))
+                .unwrap_or(false);
+        if is_legacy_path && matches!(kind.as_str(), "smb" | "ftp" | "sftp") {
+            changed = true;
+            continue;
+        }
+        out.push(line.to_string());
+    }
+    if changed {
+        store::write_atomic(&conf_path, &out.join("\n"))?;
+    }
+    Ok(())
+}
+
 /// 按优先级查找 rclone 可执行文件：
 /// 1. 环境变量 RCLONE_PATH
 /// 2. 与本程序同目录（打包时可把 rclone 放进来，实现"开箱即用"）
@@ -287,9 +351,8 @@ fn write_remote(
                 .trim_end_matches('/');
             body.push(format!("host = {host}"));
             body.push(format!("port = {}", conn.port));
-            if !conn.path.trim().is_empty() {
-                body.push(format!("path = {}", conn.path.trim().trim_matches('/')));
-            }
+            // 共享名 / 子目录不写进 conf：rclone 的 smb/ftp/sftp 后端都没有 `path` 键，
+            // 写进去是无效配置。真正的路径由 `remote_spec()` 拼到 `remote:共享名/子目录`。
         }
     }
 
@@ -353,13 +416,7 @@ pub fn build_mount_args(
     rc_port: u16,
 ) -> Result<Vec<String>, String> {
     let conf = store::rclone_conf_path(app)?;
-    let mut spec = format!("{}:", remote_name(&conn.id));
-    if conn.protocol.is_s3() {
-        let bucket = conn.path.trim().trim_matches('/');
-        if !bucket.is_empty() {
-            spec = format!("{}:{}", remote_name(&conn.id), bucket);
-        }
-    }
+    let spec = remote_spec(conn);
 
     let mut args: Vec<String> = vec![
         "mount".into(),
@@ -795,14 +852,7 @@ pub fn tail_log(path: &Path, max_lines: usize) -> String {
 pub fn probe_latency(app: &AppHandle, conn: &Connection, timeout_secs: u64) -> Result<u64, String> {
     let rclone = find_rclone(app).ok_or_else(|| "未找到 rclone".to_string())?;
     let conf = store::rclone_conf_path(app)?;
-
-    let mut spec = format!("{}:", remote_name(&conn.id));
-    if conn.protocol.is_s3() {
-        let bucket = conn.path.trim().trim_matches('/');
-        if !bucket.is_empty() {
-            spec = format!("{}:{}", remote_name(&conn.id), bucket);
-        }
-    }
+    let spec = remote_spec(conn);
 
     let mut cmd = command_for(&rclone);
     // 只看根目录这一层就够了。注意 --max-depth 0 在 rclone 里表示「不限深度」，

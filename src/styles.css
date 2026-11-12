@@ -972,6 +972,18 @@ input[type="number"].ctl {
   align-items: start;
 }
 
+/* 端口：常用端口下拉 + 需要时下方补一个手填框 */
+.port-box {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+
+.port-box > .ctl {
+  width: 100%;
+}
+
 /* ------------------------------ 侧栏环境卡片 */
 .env-card {
   display: flex;

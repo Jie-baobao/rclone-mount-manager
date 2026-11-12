@@ -24,6 +24,23 @@ interface Props {
 
 const LETTERS = "DEFGHIJKLMNOPQRSTUVWXYZ".split("");
 
+/**
+ * 常用端口清单：下拉里按协议分组，标注「端口 · 协议 · 用途」。
+ * 只做建议，用户随时切到「自定义…」手填（NAS 上改过端口的很常见）。
+ */
+const PORT_PRESETS: { port: number; proto: Protocol; note?: string }[] = [
+  { port: 445, proto: "smb" },
+  { port: 139, proto: "smb", note: "NetBIOS" },
+  { port: 80, proto: "webdav" },
+  { port: 443, proto: "webdav" },
+  { port: 5005, proto: "webdav", note: "Synology" },
+  { port: 5006, proto: "webdav", note: "Synology" },
+  { port: 21, proto: "ftp" },
+  { port: 2121, proto: "ftp" },
+  { port: 22, proto: "sftp" },
+  { port: 2222, proto: "sftp" },
+];
+
 export default function ConnectionForm({ initial, env, t, onClose, onSaved }: Props) {
   const win = isWindows(env);
   const editing = !!initial;
@@ -31,7 +48,15 @@ export default function ConnectionForm({ initial, env, t, onClose, onSaved }: Pr
   const [name, setName] = useState(initial?.name ?? "");
   const [protocol, setProtocol] = useState<Protocol>(initial?.protocol ?? "smb");
   const [host, setHost] = useState(initial?.host ?? "");
-  const [port, setPort] = useState<number>(initial?.port ?? PROTOCOL_META.smb.port);
+  /** 端口存字符串：自定义模式下用户可能正在清空重填，中间态不能强转成数字 */
+  const [portText, setPortText] = useState<string>(
+    String(initial?.port ?? PROTOCOL_META.smb.port)
+  );
+  /** 下拉选了「自定义…」：额外显示一个数字输入框 */
+  const [portCustom, setPortCustom] = useState<boolean>(
+    () =>
+      !PORT_PRESETS.some((p) => p.port === (initial?.port ?? PROTOCOL_META.smb.port))
+  );
   const [path, setPath] = useState(initial?.path ?? "");
   const [user, setUser] = useState(initial?.user ?? "");
   const [password, setPassword] = useState("");
@@ -68,6 +93,20 @@ export default function ConnectionForm({ initial, env, t, onClose, onSaved }: Pr
 
   const meta = PROTOCOL_META[protocol];
   const isS3 = protocol === "s3";
+
+  const portNum = Number(portText);
+  const port = portNum >= 1 && portNum <= 65535 ? portNum : meta.port;
+  /** 自定义模式下没填或超出范围：不许保存，也提示一下 */
+  const portBad = portCustom && !(portNum >= 1 && portNum <= 65535);
+
+  /** 下拉分组顺序：当前协议排最前，省得每次往下翻 */
+  const portGroups = useMemo(
+    () =>
+      (["smb", "webdav", "ftp", "sftp"] as Protocol[]).sort((a, b) =>
+        a === protocol ? -1 : b === protocol ? 1 : 0
+      ),
+    [protocol]
+  );
 
   // 新建连接时挂载点用后端给的平台默认值（Linux 家目录、macOS /Volumes）：
   // /mnt 属于 root 普通用户建不了目录，macOS 挂家目录 Finder 又看不见。
@@ -172,9 +211,29 @@ export default function ConnectionForm({ initial, env, t, onClose, onSaved }: Pr
 
   function changeProtocol(p: Protocol) {
     setProtocol(p);
-    setPort(PROTOCOL_META[p].port);
+    // 换协议就把端口回到该协议的常用值，用户改过的手填端口不再沿用
+    setPortText(String(PROTOCOL_META[p].port));
+    setPortCustom(false);
     setResult(null);
     if (!editing && win) setTarget(target || "Z:");
+  }
+
+  /** 下拉选端口：'custom' 是最后一项「自定义…」 */
+  function pickPort(v: string) {
+    if (v === "custom") {
+      setPortCustom(true);
+      return;
+    }
+    setPortCustom(false);
+    setPortText(v);
+  }
+
+  /** 下拉选项文案：`445 · SMB`、`139 · SMB · NetBIOS`、`445 · SMB · 默认` */
+  function portLabel(o: { port: number; note?: string }, proto: Protocol) {
+    const parts = [String(o.port), PROTOCOL_META[proto].short];
+    if (o.note) parts.push(o.note);
+    if (o.port === PROTOCOL_META[proto].port) parts.push(t("cf.portDefault"));
+    return parts.join(" · ");
   }
 
   function applyPreset(key: string) {
@@ -225,10 +284,14 @@ export default function ConnectionForm({ initial, env, t, onClose, onSaved }: Pr
           <button className="btn ghost" onClick={onClose}>
             {t("cf.cancel")}
           </button>
-          <button className="btn" onClick={doTest} disabled={testing || !host}>
+          <button className="btn" onClick={doTest} disabled={testing || !host || portBad}>
             {testing ? t("cf.testing") : t("cf.test")}
           </button>
-          <button className="btn primary" onClick={doSave} disabled={saving || !name || !host || !!targetWarn}>
+          <button
+            className="btn primary"
+            onClick={doSave}
+            disabled={saving || !name || !host || !!targetWarn || portBad}
+          >
             {saving ? t("cf.saving") : t("cf.save")}
           </button>
         </>
@@ -277,13 +340,36 @@ export default function ConnectionForm({ initial, env, t, onClose, onSaved }: Pr
         {!isS3 && (
           <label className="field">
             <span>{t("cf.port")}</span>
-            <input
-              className="ctl"
-              type="number"
-              value={port}
-              onChange={(e) => setPort(Number(e.target.value) || meta.port)}
-              placeholder={String(meta.port)}
-            />
+            <div className="port-box">
+              <select
+                className="ctl"
+                value={portCustom ? "custom" : String(port)}
+                onChange={(e) => pickPort(e.target.value)}
+              >
+                {portGroups.map((p) => (
+                  <optgroup key={p} label={PROTOCOL_META[p].label}>
+                    {PORT_PRESETS.filter((o) => o.proto === p).map((o) => (
+                      <option key={`${p}-${o.port}`} value={String(o.port)}>
+                        {portLabel(o, p)}
+                      </option>
+                    ))}
+                  </optgroup>
+                ))}
+                <option value="custom">{t("cf.portCustom")}</option>
+              </select>
+              {portCustom && (
+                <input
+                  className="ctl"
+                  type="number"
+                  min={1}
+                  max={65535}
+                  value={portText}
+                  onChange={(e) => setPortText(e.target.value.replace(/[^\d]/g, ""))}
+                  placeholder={String(meta.port)}
+                  aria-label={t("cf.port")}
+                />
+              )}
+            </div>
           </label>
         )}
 
@@ -345,6 +431,8 @@ export default function ConnectionForm({ initial, env, t, onClose, onSaved }: Pr
       {isS3 && <p className="tips">{t("cf.s3Tip")}</p>}
 
       {targetWarn && <p className="tips bad-text">⚠ {targetWarn}</p>}
+
+      {portBad && <p className="tips bad-text">⚠ {t("cf.portBad")}</p>}
 
       {!win && /^\/mnt(\/|$)/.test(target.trim()) && <p className="tips">{t("cf.rootTargetTip")}</p>}
 
