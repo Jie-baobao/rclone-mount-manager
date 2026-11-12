@@ -88,3 +88,29 @@ pub fn save_traffic(app: &AppHandle, map: &HashMap<String, TrafficDay>) -> Resul
     let text = serde_json::to_string_pretty(map).map_err(|e| format!("序列化流量账本失败：{e}"))?;
     write_atomic(&path, &text)
 }
+
+// ---------------------------------------------------------------- 探测历史
+
+/// 探测历史：连接 id → [(时间戳秒, 延迟微秒)]，0 表示这次探测失败。
+/// 只留最近 7 天，够画「这几天的稳定性」，也不会无限长大。
+pub type HistoryMap = HashMap<String, Vec<(i64, u64)>>;
+
+pub fn history_path(app: &AppHandle) -> Result<PathBuf, String> {
+    Ok(config_dir(app)?.join("history.json"))
+}
+
+pub fn load_history(app: &AppHandle) -> HistoryMap {
+    let Ok(path) = history_path(app) else {
+        return HashMap::new();
+    };
+    match fs::read_to_string(&path) {
+        Ok(text) => serde_json::from_str(&text).unwrap_or_default(),
+        Err(_) => HashMap::new(),
+    }
+}
+
+pub fn save_history(app: &AppHandle, map: &HistoryMap) -> Result<(), String> {
+    let path = history_path(app)?;
+    let text = serde_json::to_string(map).map_err(|e| format!("序列化探测历史失败：{e}"))?;
+    write_atomic(&path, &text)
+}

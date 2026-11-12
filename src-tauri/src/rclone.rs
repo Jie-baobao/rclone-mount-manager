@@ -597,8 +597,22 @@ pub fn parse_extra_args(raw: &str) -> Result<Vec<String>, String> {
     Ok(out)
 }
 
+/// Windows 上「哪些盘符已被系统分配」的位图（bit0 = A:，bit1 = B: …）。
+///
+/// 必须用 `GetLogicalDrives()` 而不是 `Path::exists("X:\\")`：
+/// - **空光驱**没有介质，`exists` 返回 false，但盘符确实被占着，挂上去必失败；
+/// - **断连的网络驱动器**（映射盘）`exists` 也可能返回 false，同样占着盘符；
+/// - `SUBST` 出来的虚拟盘、加密盘软件挂的盘也可能读不到根目录。
+#[cfg(windows)]
+fn logical_drives() -> u32 {
+    extern "system" {
+        fn GetLogicalDrives() -> u32;
+    }
+    unsafe { GetLogicalDrives() }
+}
+
 /// 目标位置（盘符/挂载点）是否已经被系统占用。
-/// Windows 上用「这个盘符的根目录存不存在」判断；类 Unix 上「目录存在且非空」算占用。
+/// Windows 上查盘符位图；类 Unix 上「目录存在且非空」算占用。
 pub fn target_taken(target: &str) -> bool {
     let t = target.trim();
     if t.is_empty() {
@@ -606,12 +620,17 @@ pub fn target_taken(target: &str) -> bool {
     }
     #[cfg(windows)]
     {
-        let root = if t.ends_with('\\') {
-            t.to_string()
-        } else {
-            format!("{t}\\")
-        };
-        std::path::Path::new(&root).exists()
+        // 形如 "Z:" / "Z:\" → 查位图；其它（UNC 路径、普通目录）退回存在性判断
+        let mut chars = t.chars();
+        let letter = chars.next().unwrap_or(' ');
+        let is_drive = chars.next() == Some(':')
+            && letter.is_ascii_alphabetic()
+            && t[2..].trim_start_matches(['\\', '/']).is_empty();
+        if is_drive {
+            let idx = (letter.to_ascii_uppercase() as u8 - b'A') as u32;
+            return logical_drives() & (1 << idx) != 0;
+        }
+        std::path::Path::new(t).exists()
     }
     #[cfg(not(windows))]
     {
@@ -620,6 +639,54 @@ pub fn target_taken(target: &str) -> bool {
             Err(_) => false,
         }
     }
+}
+
+/// 读远程容量：`rclone about --json` 返回 `{total, used, free}`（字节）。
+///
+/// 不是所有后端都支持（FTP 多数不支持、WebDAV 要看服务端是否上报配额），
+/// 不支持时会报 `about not supported`，由界面隐藏容量条而不是报错。
+pub fn about(app: &AppHandle, conn: &Connection, timeout_secs: u64) -> Result<(u64, u64, u64), String> {
+    let rclone = find_rclone(app).ok_or_else(|| "未找到 rclone".to_string())?;
+    let conf = store::rclone_conf_path(app)?;
+    let spec = remote_spec(conn);
+    let out = command_for(&rclone)
+        .arg("about")
+        .arg(&spec)
+        .arg("--json")
+        .arg("--config")
+        .arg(conf.to_string_lossy().to_string())
+        .arg("--timeout")
+        .arg(format!("{timeout_secs}s"))
+        .arg("--contimeout")
+        .arg(format!("{timeout_secs}s"))
+        .arg("--retries")
+        .arg("1")
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|e| format!("执行 rclone about 失败：{e}"))?;
+    if !out.status.success() {
+        let err = String::from_utf8_lossy(&out.stderr);
+        let line = err
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .last()
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        return Err(if line.is_empty() {
+            "该服务不支持查询容量".into()
+        } else {
+            line.chars().take(200).collect()
+        });
+    }
+    let v: serde_json::Value =
+        serde_json::from_slice(&out.stdout).map_err(|e| format!("解析容量数据失败：{e}"))?;
+    let num = |k: &str| v.get(k).and_then(|x| x.as_u64()).unwrap_or(0);
+    let (total, used, free) = (num("total"), num("used"), num("free"));
+    if total == 0 && used == 0 && free == 0 {
+        return Err("该服务不支持查询容量".into());
+    }
+    Ok((total, used, free))
 }
 
 /// 卷标：有分组时显示成 `[工作] NAS`，资源管理器按名称排序时同组磁盘自然相邻。

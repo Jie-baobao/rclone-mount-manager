@@ -17,7 +17,7 @@ use std::process::Child;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use tauri::menu::{Menu, MenuItem};
+use tauri::menu::{IsMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_notification::NotificationExt;
@@ -54,6 +54,18 @@ impl Default for Health {
     }
 }
 
+/// 一条正在传输的文件（来自 rclone rc 的 `transferring` 数组）
+#[derive(Clone, Default, serde::Serialize)]
+pub struct TransferItem {
+    pub name: String,
+    pub bytes: u64,
+    pub size: u64,
+    /// 字节/秒
+    pub speed: f64,
+    /// 0~100
+    pub percentage: u8,
+}
+
 /// 一个连接本次挂载期间的统计数据，详情页「节点历史」直接展示这个
 #[derive(Clone, Default, serde::Serialize)]
 pub struct StatsSnapshot {
@@ -84,6 +96,8 @@ pub struct StatsSnapshot {
     pub today_down: u64,
     pub total_up: u64,
     pub total_down: u64,
+    /// 正在传输的文件（最多 8 条，够看进度了；多了前端也放不下）
+    pub transferring: Vec<TransferItem>,
     /// 上一次采样的字节数，用来算瞬时速度（不落前端）
     #[serde(skip)]
     pub last_bytes: u64,
@@ -100,6 +114,21 @@ impl StatsSnapshot {
             self.history.drain(0..drop);
         }
     }
+}
+
+/// 远程容量（`rclone about`）。
+/// 缓存一会儿再返回：这个查询要走一次网络，详情页每次聚焦都问一遍太浪费。
+#[derive(Clone, serde::Serialize)]
+pub struct DiskUsage {
+    pub total: u64,
+    pub used: u64,
+    pub free: u64,
+    /// 该协议/服务是否支持查询容量（false 时界面隐藏整块）
+    pub supported: bool,
+    /// 不支持或失败时的说明
+    pub note: String,
+    /// 查询时间（秒）
+    pub at: i64,
 }
 
 pub struct AppState {
@@ -125,6 +154,10 @@ pub struct AppState {
     sendto_held: AtomicBool,
     /// 因锁屏被卸载的连接 id（解锁后按这份名单挂回去）；空 = 没有需要恢复的
     lock_unmounted: Mutex<Vec<String>>,
+    /// 容量查询缓存：连接 id → (查询时刻, 结果)。60 秒内重复打开详情页不再走网络
+    usage: Mutex<HashMap<String, (Instant, DiskUsage)>>,
+    /// 探测历史（跨会话保留 7 天）：连接 id → [(时间戳秒, 延迟微秒，0 表示失败)]
+    history: Mutex<HashMap<String, Vec<(i64, u64)>>>,
 }
 
 impl Default for AppState {
@@ -140,6 +173,8 @@ impl Default for AppState {
             locked: AtomicBool::new(false),
             sendto_held: AtomicBool::new(false),
             lock_unmounted: Mutex::new(Vec::new()),
+            usage: Mutex::new(HashMap::new()),
+            history: Mutex::new(HashMap::new()),
         }
     }
 }
@@ -637,6 +672,7 @@ fn save_connection(
         state.health.lock().unwrap().remove(&conn.id);
         let _ = start_session(&app, state.inner(), &conn, 0);
         let _ = app.emit("state-changed", ());
+        rebuild_tray(&app);
     }
     // 名字/分组/盘符都可能改了，菜单文字要跟着变
     sync_sendto_menu(&app);
@@ -731,9 +767,97 @@ fn probe_now(app: AppHandle, id: String) -> Result<u64, String> {
     result
 }
 
+/// 读远程容量（剩余空间）。走 `rclone about --json`，60 秒内命中缓存。
+///
+/// 不同后端支持程度不一样：SMB / SFTP 基本都有，WebDAV 要看服务端是否上报配额
+/// （群晖、Nextcloud 支持）。查不到时返回 `supported: false`，界面直接不显示这一块。
 #[tauri::command]
-fn set_pinned(app: AppHandle, id: String, pinned: bool) -> Result<(), String> {
-    let mut list = store::load_connections(&app);
+async fn disk_usage(app: AppHandle, id: String) -> Result<DiskUsage, String> {
+    {
+        let state = app.state::<AppState>();
+        let cache = state.usage.lock().unwrap();
+        if let Some((at, v)) = cache.get(&id) {
+            if at.elapsed() < Duration::from_secs(60) {
+                return Ok(v.clone());
+            }
+        }
+    }
+    let conn = store::load_connections(&app)
+        .into_iter()
+        .find(|c| c.id == id)
+        .ok_or_else(|| "连接不存在".to_string())?;
+    let app2 = app.clone();
+    // rclone about 要走一次网络，别把 Tauri 的主线程堵住
+    let res = tauri::async_runtime::spawn_blocking(move || rclone::about(&app2, &conn, 8))
+        .await
+        .map_err(|e| format!("查询容量失败：{e}"))?;
+    let data = match res {
+        Ok((total, used, free)) => DiskUsage {
+            total,
+            used,
+            free,
+            supported: true,
+            note: String::new(),
+            at: now_secs(),
+        },
+        Err(e) => DiskUsage {
+            total: 0,
+            used: 0,
+            free: 0,
+            supported: false,
+            note: e,
+            at: now_secs(),
+        },
+    };
+    let state = app.state::<AppState>();
+    state
+        .usage
+        .lock()
+        .unwrap()
+        .insert(id, (Instant::now(), data.clone()));
+    Ok(data)
+}
+
+/// 探测历史的一个点：时间戳（秒）+ 延迟（微秒，0 = 这次失败）
+#[derive(serde::Serialize)]
+struct HistoryPoint {
+    t: i64,
+    us: u64,
+}
+
+/// 取最近 N 小时的探测历史，按桶降采样到最多 240 个点。
+/// 7 天 × 每 15 秒一次 ≈ 4 万个点，原样丢给 SVG 会卡，也没必要那么细。
+#[tauri::command]
+fn latency_history(app: AppHandle, id: String, hours: u64) -> Vec<HistoryPoint> {
+    let state = app.state::<AppState>();
+    let map = state.history.lock().unwrap();
+    let cutoff = now_secs() - (hours.max(1) as i64) * 3600;
+    let raw: Vec<(i64, u64)> = map
+        .get(&id)
+        .map(|v| v.iter().filter(|(t, _)| *t >= cutoff).copied().collect())
+        .unwrap_or_default();
+    if raw.is_empty() {
+        return Vec::new();
+    }
+    let bucket = (raw.len() as f64 / 240.0).ceil().max(1.0) as usize;
+    let mut out = Vec::new();
+    for chunk in raw.chunks(bucket) {
+        let good: Vec<u64> = chunk.iter().map(|(_, us)| *us).filter(|us| *us > 0).collect();
+        let avg = if good.is_empty() {
+            0
+        } else {
+            good.iter().sum::<u64>() / good.len() as u64
+        };
+        out.push(HistoryPoint {
+            t: chunk.last().map(|(t, _)| *t).unwrap_or(0),
+            us: avg,
+        });
+    }
+    out
+}
+
+#[tauri::command]
+fn set_pinned(app: AppHandle, id: String, pinned: bool) -> Result<(), String> {    let mut list = store::load_connections(&app);
     if let Some(c) = list.iter_mut().find(|c| c.id == id) {
         c.pinned = pinned;
         store::save_connections(&app, &list)?;
@@ -817,6 +941,7 @@ fn mount(app: AppHandle, state: State<'_, AppState>, id: String) -> Result<Mount
             .unwrap_or_default();
         state.errors.lock().unwrap().insert(id.clone(), tail.clone());
         let _ = app.emit("state-changed", ());
+        rebuild_tray(&app);
         // 界面可能被收在托盘里，只有日志是看不见的 —— 让前端弹一条系统通知
         let _ = app.emit(
             "notify",
@@ -833,6 +958,8 @@ fn mount(app: AppHandle, state: State<'_, AppState>, id: String) -> Result<Mount
     let _ = app.emit("state-changed", ());
     // 挂上之后才在「发送到」里露出这一项
     sync_sendto_menu(&app);
+    // 托盘菜单里的「已挂载的盘」跟着更新
+    rebuild_tray(&app);
     Ok(state_snapshot(&app, &state, &conn))
 }
 
@@ -858,6 +985,7 @@ fn unmount(app: AppHandle, state: State<'_, AppState>, id: String) -> Result<(),
     let _ = app.emit("state-changed", ());
     // 盘已经不在了，菜单项必须跟着消失，否则点了会复制失败
     sync_sendto_menu(&app);
+    rebuild_tray(&app);
     Ok(())
 }
 
@@ -891,6 +1019,7 @@ fn mount_all(app: AppHandle, state: State<'_, AppState>) -> Result<usize, String
     }
     let _ = app.emit("state-changed", ());
     sync_sendto_menu(&app);
+    rebuild_tray(&app);
     Ok(started)
 }
 
@@ -910,6 +1039,7 @@ fn unmount_all(app: AppHandle, state: State<'_, AppState>) -> Result<usize, Stri
     }
     let _ = app.emit("state-changed", ());
     sync_sendto_menu(&app);
+    rebuild_tray(&app);
     Ok(count)
 }
 
@@ -1021,6 +1151,17 @@ async fn check_updates(app: AppHandle) -> Result<update::UpdateReport, String> {
     tauri::async_runtime::spawn_blocking(move || update::check(&app))
         .await
         .map_err(|e| format!("检查更新失败：{e}"))
+}
+
+/// 下载并安装管理器自身的新版本。
+///
+/// Windows 上装完会自己退出（NSIS 需要腾出正在运行的 exe）；下载进度走
+/// `update-progress` 事件。返回安装包路径或说明文字。
+#[tauri::command]
+async fn install_app_update(app: AppHandle, version: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || update::download_and_install(&app, &version))
+        .await
+        .map_err(|e| format!("下载更新失败：{e}"))?
 }
 
 #[tauri::command]
@@ -1139,6 +1280,8 @@ fn lock_if_configured(app: &AppHandle) {
             unmount_for_lock(app);
         }
         emit_lock(app, &state);
+        // 锁定后「已挂载的盘」可能已清空，「立即锁定」也该灰掉
+        rebuild_tray(app);
     }
 }
 
@@ -1229,6 +1372,7 @@ fn lock_set_password(
     emit_lock(&app, &state);
     remount_after_unlock(&app);
     flush_sendto(&app);
+    rebuild_tray(&app);
     Ok(lock_snapshot(&app, &state))
 }
 
@@ -1251,9 +1395,9 @@ fn lock_verify(
     // 锁屏时卸掉的盘先挂回来，再放「发送到」的请求——不然请求的目标盘还不存在
     remount_after_unlock(&app);
     flush_sendto(&app);
+    rebuild_tray(&app);
     Ok(true)
 }
-
 /// 立即锁定（前端可以拿它做「手动上锁」这类入口）。
 /// 命令内部再按设置核验一遍：没设密码或没开「最小化锁定」就不锁。
 #[tauri::command]
@@ -1514,6 +1658,7 @@ fn resolve_target_conflicts(
     }
     let _ = app.emit("state-changed", ());
     sync_sendto_menu(&app);
+    rebuild_tray(&app);
     Ok(started)
 }
 
@@ -1740,6 +1885,18 @@ fn spawn_supervisor(app: AppHandle) {
                 .into_iter()
                 .filter(|c| c.auto_mount)
                 .collect();
+            // 开机时网卡可能还没连上（Wi-Fi 握手、DHCP 要几秒），固定等 2 秒就挂必然失败，
+            // 然后要等 40 秒退避才重试——用户看到的就是「开机后盘半天不出现」。
+            // 这里先探一次端口：全都不通就按 2/4/8/15/30 秒退避重试，最多约一分钟，
+            // 只要有一条通了就开始挂，剩下的走正常的重连退避。
+            if !pending.is_empty() && !pending.iter().any(|c| rclone::tcp_probe(c, 2).is_ok()) {
+                for wait in [2u64, 4, 8, 15, 30] {
+                    std::thread::sleep(Duration::from_secs(wait));
+                    if pending.iter().any(|c| rclone::tcp_probe(c, 2).is_ok()) {
+                        break;
+                    }
+                }
+            }
             // 开机时盘符最容易撞：U 盘还插着、别的软件刚映射了网络驱动器、
             // 或者两条连接本身配了同一个位置。冲突的不挂，攒一条事件让前端弹窗。
             let conflicts = conflict::scan(&app, &pending);
@@ -1764,6 +1921,8 @@ fn spawn_supervisor(app: AppHandle) {
             let _ = app.emit("state-changed", ());
             // 开机自启动挂上的盘，也要在「发送到」里就位
             sync_sendto_menu(&app);
+            // 以及出现在托盘菜单的「已挂载的盘」里
+            rebuild_tray(&app);
         }
 
         // 看护循环：进程意外退出时按退避策略重连
@@ -1844,6 +2003,7 @@ fn spawn_supervisor(app: AppHandle) {
             let _ = app.emit("state-changed", ());
             // 进程掉了（还没重连上）这一项就不该再出现在「发送到」里
             sync_sendto_menu(&app);
+            rebuild_tray(&app);
         }
     });
 }
@@ -1909,11 +2069,33 @@ fn spawn_stats_monitor(app: AppHandle) {
                         // 不会出现在 transferring 里；出现在里面的都是「写远端」的上传。
                         // 所以：有活跃上传时这段增量记上行，否则记下行。
                         // 同时读写的极端情况下会偏向一端，属于已知近似。
-                        let uploading = v
-                            .get("transferring")
-                            .and_then(|x| x.as_array())
-                            .map(|a| !a.is_empty())
-                            .unwrap_or(false);
+                        // 「正在传输的文件」：每一项带 name / bytes / size / speed / percentage。
+                        // 挂载读远端走 VFS 读句柄，不会出现在这里；出现在 transferring 里的都是写远端，
+                        // 顺带也用来判断这段流量算上行还是下行。
+                        let active = v.get("transferring").and_then(|x| x.as_array());
+                        entry.transferring = active
+                            .map(|arr| {
+                                arr.iter()
+                                    .take(8)
+                                    .map(|it| TransferItem {
+                                        name: it
+                                            .get("name")
+                                            .and_then(|x| x.as_str())
+                                            .unwrap_or("")
+                                            .to_string(),
+                                        bytes: it.get("bytes").and_then(|x| x.as_u64()).unwrap_or(0),
+                                        size: it.get("size").and_then(|x| x.as_u64()).unwrap_or(0),
+                                        speed: it.get("speed").and_then(|x| x.as_f64()).unwrap_or(0.0),
+                                        percentage: it
+                                            .get("percentage")
+                                            .and_then(|x| x.as_u64())
+                                            .unwrap_or(0)
+                                            .min(100) as u8,
+                                    })
+                                    .collect()
+                            })
+                            .unwrap_or_default();
+                        let uploading = !entry.transferring.is_empty();
                         if delta > 0 {
                             if uploading {
                                 entry.up_bytes = entry.up_bytes.saturating_add(delta);
@@ -1924,7 +2106,10 @@ fn spawn_stats_monitor(app: AppHandle) {
                         }
                     }
                     // 进程刚起或已退出：速度归零，别把上一次的数字挂着骗人
-                    None => entry.speed_bps = 0,
+                    None => {
+                        entry.speed_bps = 0;
+                        entry.transferring.clear();
+                    }
                 }
                 drop(guard);
 
@@ -1956,6 +2141,7 @@ fn spawn_health_monitor(app: AppHandle) {
     std::thread::spawn(move || {
         std::thread::sleep(Duration::from_secs(8));
         let mut last_cleanup = Instant::now();
+        let mut ticks: u32 = 0;
         loop {
             let cfg = settings::load(&app);
             std::thread::sleep(Duration::from_secs(cfg.probe_interval_secs.max(3)));
@@ -1996,6 +2182,29 @@ fn spawn_health_monitor(app: AppHandle) {
                     // 「仅进程」模式只看进程存活，没有网络往返，不产生延迟样本
                     let tracks_latency = conn.probe_mode != "process";
                     let now = now_secs();
+
+                    // 探测历史（跨会话保留 7 天）：只记真有网络往返的两种模式，
+                    // 否则「仅进程」模式的 0 会被当成探测失败画成红点。
+                    if tracks_latency {
+                        let us = result.as_ref().ok().copied().unwrap_or(0);
+                        let mut hist = state.history.lock().unwrap();
+                        let series = hist.entry(id.clone()).or_default();
+                        series.push((now, us));
+                        // 序列是按时间递增的，从头部丢过期点即可，不用全表 retain
+                        let cutoff = now - 7 * 86_400;
+                        let mut drop = 0;
+                        while drop < series.len() && series[drop].0 < cutoff {
+                            drop += 1;
+                        }
+                        if drop > 0 {
+                            series.drain(0..drop);
+                        }
+                        // 上限兜底：7 天 × 15 秒 ≈ 4 万条，留一倍余量
+                        if series.len() > 80_000 {
+                            let extra = series.len() - 80_000;
+                            series.drain(0..extra);
+                        }
+                    }
 
                     let mut guard = state.health.lock().unwrap();
                     let entry = guard.entry(id.clone()).or_default();
@@ -2097,16 +2306,87 @@ fn spawn_health_monitor(app: AppHandle) {
                 cleanup_old_logs(&app, &cfg);
                 last_cleanup = Instant::now();
             }
+
+            // 探测历史每分钟落一次盘（写一个几 KB 的 JSON，比每次探测都写划算）
+            ticks += 1;
+            if ticks % 4 == 0 {
+                let snapshot = state.history.lock().unwrap().clone();
+                let _ = store::save_history(&app, &snapshot);
+            }
         }
     });
 }
 
-fn build_tray(app: &tauri::App) -> tauri::Result<()> {
+/// 托盘菜单是「拍快照」式的：每次挂载/卸载/锁定之后都要重建一遍，
+/// 所以这里拆成独立函数，不要内联进 build_tray。
+///
+/// 除了固定项，还列出当前已挂载的盘：点一下直接在资源管理器里打开，
+/// 不用先唤出主窗口再找那条连接。
+fn tray_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
     let show = MenuItem::with_id(app, "show", "显示主窗口", true, None::<&str>)?;
     let mount_all = MenuItem::with_id(app, "mount_all", "全部挂载", true, None::<&str>)?;
     let unmount_all = MenuItem::with_id(app, "unmount_all", "全部卸载", true, None::<&str>)?;
+
+    let state = app.state::<AppState>();
+    let mounted_ids: Vec<String> = state.sessions.lock().unwrap().keys().cloned().collect();
+    let conns = store::load_connections(app);
+    let mut mounted: Vec<MenuItem<tauri::Wry>> = Vec::new();
+    for c in conns.iter().filter(|c| mounted_ids.contains(&c.id)) {
+        let label = format!("{} · {}", c.name, c.target);
+        mounted.push(MenuItem::with_id(
+            app,
+            format!("open:{}", c.id),
+            label,
+            true,
+            None::<&str>,
+        )?);
+    }
+    // 没有挂载时给一条灰掉的占位，用户才不会以为菜单坏了
+    let placeholder = MenuItem::with_id(app, "noop", "（还没有挂载的盘）", false, None::<&str>)?;
+    let sub = if mounted.is_empty() {
+        Submenu::with_items(app, "已挂载的盘", false, &[&placeholder])?
+    } else {
+        let refs: Vec<&dyn IsMenuItem<tauri::Wry>> = mounted
+            .iter()
+            .map(|m| m as &dyn IsMenuItem<tauri::Wry>)
+            .collect();
+        Submenu::with_items(app, "已挂载的盘", true, &refs)?
+    };
+
+    // 没设解锁密码时「立即锁定」没有意义，灰掉
+    let has_pass = settings::load(app).lock_hash.is_some();
+    let lock_now = MenuItem::with_id(app, "lock_now", "立即锁定", has_pass, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&show, &mount_all, &unmount_all, &quit])?;
+    let sep1 = PredefinedMenuItem::separator(app)?;
+    let sep2 = PredefinedMenuItem::separator(app)?;
+    let sep3 = PredefinedMenuItem::separator(app)?;
+
+    let items: Vec<&dyn IsMenuItem<tauri::Wry>> = vec![
+        &show,
+        &sep1,
+        &sub,
+        &sep2,
+        &mount_all,
+        &unmount_all,
+        &lock_now,
+        &sep3,
+        &quit,
+    ];
+    Menu::with_items(app, &items)
+}
+
+/// 重建托盘菜单（挂在 set_menu 上，不重建图标本身）
+fn rebuild_tray(app: &AppHandle) {
+    let Some(tray) = app.tray_by_id("main") else {
+        return;
+    };
+    if let Ok(menu) = tray_menu(app) {
+        let _ = tray.set_menu(Some(menu));
+    }
+}
+
+fn build_tray(app: &tauri::App) -> tauri::Result<()> {
+    let menu = tray_menu(app.handle())?;
 
     let mut builder = TrayIconBuilder::with_id("main")
         .tooltip("Rclone Mount 管理器")
@@ -2142,6 +2422,14 @@ fn build_tray(app: &tauri::App) -> tauri::Result<()> {
             "unmount_all" => {
                 let _ = app.emit("tray-action", "unmount_all");
             }
+            // 「已挂载的盘」里的每一项：id 形如 open:<连接 id>
+            id if id.starts_with("open:") => {
+                let cid = id.trim_start_matches("open:").to_string();
+                if let Err(e) = open_target(app.clone(), cid) {
+                    eprintln!("[tray] 打开挂载点失败：{e}");
+                }
+            }
+            "lock_now" => lock_if_configured(app),
             "quit" => app.exit(0),
             _ => {}
         });
@@ -2184,6 +2472,10 @@ pub fn run() {
             // 载入落盘的流量账本（今日/累计都在里面）
             let ledger = store::load_traffic(app.handle());
             *app.state::<AppState>().traffic.lock().unwrap() = ledger;
+
+            // 载入探测历史（7 天），详情页的「7 天」视图直接读它
+            let history = store::load_history(app.handle());
+            *app.state::<AppState>().history.lock().unwrap() = history;
 
             // 清掉上次被强杀残留的「发送到」菜单项（此时还没有任何挂载）
             sync_sendto_menu(app.handle());
@@ -2281,6 +2573,7 @@ pub fn run() {
             set_autostart,
             test_connection,
             check_updates,
+            install_app_update,
             install_rclone,
             install_winfsp,
             open_url,
@@ -2294,6 +2587,8 @@ pub fn run() {
             get_stats,
             reset_stats,
             probe_now,
+            disk_usage,
+            latency_history,
             traffic_summary,
             check_target,
             pending_conflicts,

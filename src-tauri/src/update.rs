@@ -14,6 +14,9 @@ const APP_LATEST_API: &str =
 
 #[derive(Serialize, Clone, Debug)]
 pub struct VersionInfo {
+    /// 组件类型：app / rclone / driver。界面按它决定给什么按钮
+    /// （名字是给人看的，可能随平台变，别拿名字做判断）
+    pub kind: String,
     /// rclone / WinFsp / 管理器
     pub name: String,
     pub current: String,
@@ -183,6 +186,7 @@ pub fn check(app: &AppHandle) -> UpdateReport {
         Err(e) => (String::new(), "https://github.com/Jie-baobao/rclone-mount-manager/releases".into(), e),
     };
     items.push(VersionInfo {
+        kind: "app".into(),
         name: "管理器".into(),
         current: env.app_version.clone(),
         has_update: !latest.is_empty() && is_newer(&latest, &env.app_version),
@@ -197,6 +201,7 @@ pub fn check(app: &AppHandle) -> UpdateReport {
         Err(e) => (String::new(), e),
     };
     items.push(VersionInfo {
+        kind: "rclone".into(),
         name: "rclone".into(),
         current: env.rclone_version.clone(),
         has_update: !latest.is_empty() && is_newer(&latest, &env.rclone_version),
@@ -220,6 +225,7 @@ pub fn check(app: &AppHandle) -> UpdateReport {
         (String::new(), driver.url.clone(), String::new())
     };
     items.push(VersionInfo {
+        kind: "driver".into(),
         name: driver.name.clone(),
         current: driver.version.clone(),
         has_update: !latest.is_empty() && is_newer(&latest, &driver.version),
@@ -415,4 +421,171 @@ pub fn open_url(url: &str) -> Result<(), String> {
     };
     cmd.spawn().map_err(|e| format!("打开链接失败：{e}"))?;
     Ok(())
+}
+
+// ---------------------------------------------------------------- 应用内更新
+
+/// 给更新包下载单独建一个客户端：管理器更新包约 25 MB，
+/// 用默认的 30 秒总超时在慢速网络上必然失败。
+fn download_client() -> Result<reqwest::blocking::Client, String> {
+    let mut builder = reqwest::blocking::Client::builder()
+        .user_agent(UA)
+        .timeout(std::time::Duration::from_secs(600));
+    if let Some(p) = crate::rclone::system_proxy_url() {
+        if let Ok(proxy) = reqwest::Proxy::all(&p) {
+            builder = builder.proxy(proxy);
+        }
+    }
+    builder
+        .build()
+        .map_err(|e| format!("创建网络客户端失败：{e}"))
+}
+
+/// 当前平台该下哪个安装包（按 tauri-action 的产物命名匹配）
+fn asset_suffixes() -> Vec<&'static str> {
+    #[cfg(windows)]
+    {
+        vec!["x64-setup.exe", "arm64-setup.exe"]
+    }
+    #[cfg(target_os = "macos")]
+    {
+        vec![".dmg"]
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        vec![".AppImage", ".deb"]
+    }
+}
+
+/// 在 release 的 assets 里挑出适合本机的那一个。
+/// macOS 会区分 aarch64 / x64；其它平台按后缀取第一个。
+fn pick_asset(assets: &[serde_json::Value]) -> Option<(String, String)> {
+    let suffixes = asset_suffixes();
+    let mut candidates: Vec<(String, String)> = Vec::new();
+    for a in assets {
+        let name = a.get("name").and_then(|x| x.as_str()).unwrap_or("");
+        let url = a.get("browser_download_url").and_then(|x| x.as_str()).unwrap_or("");
+        if name.is_empty() || url.is_empty() {
+            continue;
+        }
+        let lower = name.to_ascii_lowercase();
+        if suffixes.iter().any(|s| lower.ends_with(&s.to_ascii_lowercase())) {
+            candidates.push((name.to_string(), url.to_string()));
+        }
+    }
+    if candidates.is_empty() {
+        return None;
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let want_arm = cfg!(target_arch = "aarch64");
+        let arch_hit = candidates.iter().find(|(n, _)| {
+            let l = n.to_ascii_lowercase();
+            if want_arm {
+                l.contains("aarch64") || l.contains("arm64")
+            } else {
+                l.contains("x64") || l.contains("x86_64")
+            }
+        });
+        if let Some(c) = arch_hit {
+            return Some(c.clone());
+        }
+    }
+    candidates.into_iter().next()
+}
+
+/// 下载最新安装包并就地安装。
+///
+/// - Windows：NSIS 安装包支持 `/S` 静默安装；安装前必须让本进程退出，
+///   否则安装器替换不了正在运行的 exe（这里是先起安装器再退出，中间留 800ms）。
+/// - macOS / Linux：安装包没法静默替换，下载完打开它（dmg）或打开所在文件夹，
+///   剩下交给用户点两下。
+pub fn download_and_install(app: &AppHandle, version: &str) -> Result<String, String> {
+    use tauri::Emitter;
+
+    let tag = format!("v{}", version.trim().trim_start_matches('v'));
+    let api = format!(
+        "https://api.github.com/repos/Jie-baobao/rclone-mount-manager/releases/tags/{tag}"
+    );
+    let text = get_text(&api)?;
+    let v: serde_json::Value = serde_json::from_str(&text).map_err(|e| format!("解析发布信息失败：{e}"))?;
+    let assets = v
+        .get("assets")
+        .and_then(|x| x.as_array())
+        .cloned()
+        .unwrap_or_default();
+    let (name, url) = pick_asset(&assets).ok_or_else(|| {
+        "这个版本里没有适合本机的安装包，请到发布页手动下载".to_string()
+    })?;
+
+    let dir = std::env::temp_dir().join("rclone-mount-manager-update");
+    fs::create_dir_all(&dir).map_err(|e| format!("创建临时目录失败：{e}"))?;
+    let path = dir.join(&name);
+
+    let mut resp = download_client()?
+        .get(&url)
+        .send()
+        .map_err(|e| format!("下载失败：{e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("下载失败：HTTP {}", resp.status().as_u16()));
+    }
+    let total = resp.content_length().unwrap_or(0);
+    let mut file = fs::File::create(&path).map_err(|e| format!("写入安装包失败：{e}"))?;
+    let mut buf = vec![0u8; 64 * 1024];
+    let mut received: u64 = 0;
+    let mut last_emit = std::time::Instant::now();
+    loop {
+        let n = resp.read(&mut buf).map_err(|e| format!("下载中断：{e}"))?;
+        if n == 0 {
+            break;
+        }
+        file.write_all(&buf[..n])
+            .map_err(|e| format!("写入安装包失败：{e}"))?;
+        received += n as u64;
+        // 200ms 一次，别把前端的 IPC 淹了
+        if last_emit.elapsed() >= std::time::Duration::from_millis(200) {
+            let _ = app.emit(
+                "update-progress",
+                serde_json::json!({ "received": received, "total": total }),
+            );
+            last_emit = std::time::Instant::now();
+        }
+    }
+    let _ = app.emit(
+        "update-progress",
+        serde_json::json!({ "received": received, "total": total, "done": true }),
+    );
+    if received == 0 {
+        return Err("下载到的安装包是空的，请到发布页手动下载".into());
+    }
+
+    #[cfg(windows)]
+    {
+        // NSIS：/S 静默安装，装完不自动启动，提示用户手动打开
+        std::process::Command::new(&path)
+            .arg("/S")
+            .spawn()
+            .map_err(|e| format!("启动安装程序失败：{e}"))?;
+        std::thread::sleep(std::time::Duration::from_millis(800));
+        app.exit(0);
+        Ok(path.to_string_lossy().to_string())
+    }
+    #[cfg(not(windows))]
+    {
+        // 双击安装包这件事各平台不一样，交给系统默认程序打开
+        #[cfg(target_os = "macos")]
+        let mut cmd = {
+            let mut c = std::process::Command::new("open");
+            c.arg(&path);
+            c
+        };
+        #[cfg(all(unix, not(target_os = "macos")))]
+        let mut cmd = {
+            let mut c = std::process::Command::new("xdg-open");
+            c.arg(dir.to_string_lossy().to_string());
+            c
+        };
+        cmd.spawn().map_err(|e| format!("打开安装包失败：{e}"))?;
+        Ok(path.to_string_lossy().to_string())
+    }
 }
