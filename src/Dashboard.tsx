@@ -1,5 +1,17 @@
-import { fmtLatency, healthOf, healthTip, PROTOCOL_META, type Connection, type MountState, type TrafficSummary } from "./api";
+import { useEffect, useState } from "react";
+import {
+  api,
+  fmtLatency,
+  healthOf,
+  healthTip,
+  PROTOCOL_META,
+  type Connection,
+  type MountState,
+  type TrafficPoint,
+  type TrafficSummary,
+} from "./api";
 import TrafficBar from "./TrafficBar";
+import TrafficChart from "./TrafficChart";
 import type { T } from "./i18n";
 
 /**
@@ -28,6 +40,15 @@ export default function Dashboard({
     return cls.includes("bad") || cls.includes("warn");
   });
   const stopped = conns.length - mounted.length;
+
+  // 近 7 天流量历史（后端落盘，跨重启保留）；失败就当没有，图会显示占位提示
+  const [hist, setHist] = useState<TrafficPoint[]>([]);
+  useEffect(() => {
+    api
+      .trafficHistory()
+      .then(setHist)
+      .catch(() => setHist([]));
+  }, []);
 
   const cards: Array<{ key: string; label: string; value: number; cls: string }> = [
     { key: "total", label: t("home.total"), value: conns.length, cls: "" },
@@ -78,6 +99,7 @@ export default function Dashboard({
               totalDown={traffic?.total_down ?? 0}
               t={t}
             />
+            <TrafficChart points={hist} t={t} />
           </section>
 
           <section className="panel">

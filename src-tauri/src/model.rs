@@ -72,6 +72,8 @@ pub struct Connection {
     /// SMB 共享名 / WebDAV 子路径（可空）
     pub path: String,
     pub user: String,
+    /// SMB 域 / 工作组（可空）：微软账户填 MicrosoftAccount，域环境填 NetBIOS 域名
+    pub domain: String,
     /// Windows 盘符（"Z:"）或类 Unix 挂载点（"/mnt/nas"）
     pub target: String,
     pub cache_dir: String,
@@ -127,6 +129,7 @@ impl Default for Connection {
             port: 445,
             path: String::new(),
             user: String::new(),
+            domain: String::new(),
             target: String::new(),
             cache_dir: String::new(),
             ignore_cert: false,
@@ -223,6 +226,7 @@ pub struct ConnectionInput {
     pub port: Option<u16>,
     pub path: String,
     pub user: String,
+    pub domain: String,
     /// 新建时必填；编辑时留空表示"沿用旧密码"
     pub password: String,
     pub target: String,
@@ -255,6 +259,7 @@ impl Default for ConnectionInput {
             port: None,
             path: String::new(),
             user: String::new(),
+            domain: String::new(),
             password: String::new(),
             target: String::new(),
             cache_dir: String::new(),

@@ -15,12 +15,18 @@ const RULES: { re: RegExp; key: string }[] = [
   { re: /mountpoint is not empty|mount point is not empty|directory not empty/i, key: "err.busy" },
   // 驱动缺失
   { re: /winfsp|fuse: device not found|fusermount|dokan|fuse isn't installed|no fuse/i, key: "err.driver" },
+  // SMB 认证失败：比通用 401 更具体，得放在 401 前面才能命中
+  // （0xC000006A 密码错 / 0xC0000064 用户不存在 / 0xC0000234 账户被锁）
+  {
+    re: /attempted logon is invalid|logon failure|bad username|nt[ _-]?status.*logon|0xc000006[4a]|0xc0000234|account (is )?(currently )?locked/i,
+    key: "err.smbAuth",
+  },
   // 认证
   { re: /\b401\b|unauthorized|authentication failed|auth failed|invalid credentials|登录失败/i, key: "err.401" },
   { re: /\b403\b|forbidden/i, key: "err.403" },
-  // 共享 / 路径不存在（SMB 共享名写错最常见）
+  // 共享 / 路径不存在（SMB 共享名写错最常见；BAD_NETWORK_NAME 是 SMB 树连接失败的原话）
   {
-    re: /share not found|path not found|directory not found|\b404\b|no such file or directory/i,
+    re: /share not found|path not found|directory not found|tree connect|bad network name|\b404\b|no such file or directory/i,
     key: "err.404",
   },
   // 证书
@@ -29,13 +35,15 @@ const RULES: { re: RegExp; key: string }[] = [
   { re: /no such host|name resolution|dns|server misbehaving|lookup .* failed/i, key: "err.dns" },
   // 连接被拒 / 端口不对
   { re: /connection refused|connect: refused|actively refused/i, key: "err.refused" },
-  // 超时 / 网络不可达
+  // 超时 / 网络不可达 / 连接中途断开
   {
-    re: /timeout|timed out|i\/o timeout|connection reset|network is unreachable|no route to host/i,
+    re: /timeout|timed out|i\/o timeout|connection reset|network is unreachable|no route to host|server closed|unexpected eof|broken pipe/i,
     key: "err.timeout",
   },
   // 权限
   { re: /access is denied|permission denied|operation not permitted|拒绝访问/i, key: "err.denied" },
+  // 容量满 / 配额
+  { re: /no space left|quota exceeded|disk quota|insufficient (disk )?space/i, key: "err.quota" },
   // 密码里混了全角字符：这个坑踩过很多次，单独提示
   { re: /非法|invalid password|密码/i, key: "err.password" },
 ];

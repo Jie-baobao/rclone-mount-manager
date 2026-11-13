@@ -31,16 +31,22 @@ pub fn log_dir(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(dir)
 }
 
-/// 读取连接列表；文件不存在或损坏时返回空列表而不是报错，
-/// 避免一份坏配置把整个应用卡死。
-pub fn load_connections(app: &AppHandle) -> Vec<Connection> {
+/// 读原始连接列表（不查密码状态）。saved_password_ids 内部用它，
+/// 避免 load_connections ↔ saved_password_ids 互相递归。
+pub fn load_connections_raw(app: &AppHandle) -> Vec<Connection> {
     let Ok(path) = connections_path(app) else {
         return Vec::new();
     };
-    let mut list: Vec<Connection> = match fs::read_to_string(&path) {
+    match fs::read_to_string(&path) {
         Ok(text) => serde_json::from_str(&text).unwrap_or_default(),
         Err(_) => Vec::new(),
-    };
+    }
+}
+
+/// 读取连接列表；文件不存在或损坏时返回空列表而不是报错，
+/// 避免一份坏配置把整个应用卡死。
+pub fn load_connections(app: &AppHandle) -> Vec<Connection> {
+    let mut list = load_connections_raw(app);
     // conf 里到底存没存过密码：表单的「已保存 / 必填」提示靠它。
     // 每次读列表都现查一遍（conf 就几 KB），别在保存时落盘——那会变陈旧。
     let saved = crate::rclone::saved_password_ids(app);
@@ -93,6 +99,34 @@ pub fn load_traffic(app: &AppHandle) -> HashMap<String, TrafficDay> {
 pub fn save_traffic(app: &AppHandle, map: &HashMap<String, TrafficDay>) -> Result<(), String> {
     let path = traffic_path(app)?;
     let text = serde_json::to_string_pretty(map).map_err(|e| format!("序列化流量账本失败：{e}"))?;
+    write_atomic(&path, &text)
+}
+
+// ---------------------------------------------------------------- 流量历史
+
+/// 近 7 天的每日流量合计：日期 → (上行字节, 下行字节)。
+/// 与 traffic.json（当天计数器 + 累计值）分开存：这是给折线图用的账本，
+/// 每天一行，过期就剪掉，不会无限长。
+pub type TrafficHistory = HashMap<String, (u64, u64)>;
+
+pub fn traffic_history_path(app: &AppHandle) -> Result<PathBuf, String> {
+    Ok(config_dir(app)?.join("traffic_history.json"))
+}
+
+pub fn load_traffic_history(app: &AppHandle) -> TrafficHistory {
+    let Ok(path) = traffic_history_path(app) else {
+        return HashMap::new();
+    };
+    match fs::read_to_string(&path) {
+        Ok(text) => serde_json::from_str(&text).unwrap_or_default(),
+        Err(_) => HashMap::new(),
+    }
+}
+
+pub fn save_traffic_history(app: &AppHandle, map: &TrafficHistory) -> Result<(), String> {
+    let path = traffic_history_path(app)?;
+    let text =
+        serde_json::to_string_pretty(map).map_err(|e| format!("序列化流量历史失败：{e}"))?;
     write_atomic(&path, &text)
 }
 

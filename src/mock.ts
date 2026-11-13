@@ -24,6 +24,7 @@ const conns: Connection[] = [
     port: 8080,
     path: "",
     user: "alice",
+    domain: "WORKGROUP",
     target: "Z:",
     cache_dir: "",
     ignore_cert: false,
@@ -53,6 +54,7 @@ const conns: Connection[] = [
     port: 445,
     path: "public",
     user: "work",
+    domain: "",
     target: "Y:",
     cache_dir: "",
     ignore_cert: false,
@@ -83,6 +85,7 @@ const conns: Connection[] = [
     port: 443,
     path: "backup",
     user: "AKIAEXAMPLE",
+    domain: "",
     target: "X:",
     cache_dir: "",
     ignore_cert: false,
@@ -275,6 +278,20 @@ function reply(cmd: string, args?: Record<string, unknown>): unknown {
         total_up: 12_884_901_888,
         total_down: 68_719_476_736,
       };
+    case "traffic_history": {
+      // 近 7 天：上行（备份）白天多，下行（回看）零散
+      return Array.from({ length: 7 }, (_, i) => {
+        const d = new Date(Date.now() - (6 - i) * 86_400_000);
+        const date = d.toISOString().slice(0, 10);
+        return {
+          date,
+          up: 300_000_000 + ((i * 613) % 9) * 120_000_000,
+          down: i % 3 === 0 ? 50_000_000 + ((i * 271) % 5) * 90_000_000 : 0,
+        };
+      });
+    }
+    case "export_diagnostics":
+      return "C:\\Users\\alice\\AppData\\Roaming\\io.github.rclonemount.manager\\diagnostics-demo.zip";
     case "check_target": {
       // 预览环境里也做一次真实冲突检查：换了别的连接占用的盘符就能看到提示
       const t = String(args?.target ?? "").trim().toUpperCase();

@@ -327,11 +327,26 @@ export default function SettingsPanel({
   async function copyDiag() {
     const ok = await copyText(diagText());
     if (!ok) {
-      notify("bad", t("st.diagFail"));
+      notify("bad", t("st.diagCopyFail"));
       return;
     }
     setDiagCopied(true);
     window.setTimeout(() => setDiagCopied(false), 1800);
+  }
+
+  /** 导出诊断包（zip）：后端打包完在资源管理器里定位它 */
+  const [diagBusy, setDiagBusy] = useState(false);
+  async function exportDiag() {
+    setDiagBusy(true);
+    try {
+      const path = await api.exportDiagnostics();
+      await api.openPath(path).catch(() => undefined);
+      notify("ok", t("st.diagDone", { path }));
+    } catch (e) {
+      notify("bad", t("st.diagFail", { e: String(e) }));
+    } finally {
+      setDiagBusy(false);
+    }
   }
 
   const srcLabel: Record<string, string> = {
@@ -725,6 +740,9 @@ export default function SettingsPanel({
         </button>
         <button className="btn ghost" onClick={() => void copyDiag()}>
           {diagCopied ? t("st.diagCopied") : t("st.diagCopy")}
+        </button>
+        <button className="btn" disabled={diagBusy} onClick={() => void exportDiag()}>
+          {diagBusy ? "…" : t("st.diagExport")}
         </button>
       </div>
 

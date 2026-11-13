@@ -1,6 +1,6 @@
 [package]
 name = "rclone-mount-manager"
-version = "0.3.14"
+version = "0.3.15"
 description = "Cross-platform GUI to mount SMB / WebDAV / FTP / SFTP as local drives via rclone + WinFsp / macFUSE / FUSE"
 authors = ["rclone-mount-manager contributors"]
 edition = "2021"
@@ -32,6 +32,11 @@ aes-gcm = "0.10"
 pbkdf2 = { version = "0.12", features = ["hmac"] }
 sha2 = "0.10"
 rand = "0.8"
+# 系统凭据库（Windows 凭据管理器 / macOS 钥匙串）存密码，conf 里不再落密码。
+# 只在 Windows/macOS 启用：Linux 没有统一凭据服务（secret-service 依赖 dbus），
+# 该平台继续用 conf 存（见 credentials.rs）。
+[target.'cfg(any(target_os = "windows", target_os = "macos"))'.dependencies]
+keyring = { version = "3", default-features = false, features = ["windows-native", "apple-native"] }
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.52"

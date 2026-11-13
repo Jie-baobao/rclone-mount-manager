@@ -13,35 +13,151 @@ pub fn remote_name(id: &str) -> String {
 
 /// conf 里已保存密码的 remote id 集合。
 ///
-/// 密码不在 connections.json 里，只在 rclone.conf 的 `pass =`（S3 是 `secret_access_key =`）里。
-/// 表单的「已保存密码 / 必填」提示以这里为准——不能凭占位符猜，否则用户会以为输过密码，
-/// 实际 rclone 发的是空密码（`attempted logon is invalid` 就是这么来的）。
+/// 密码现在主要存**系统凭据库**（Windows 凭据管理器 / macOS 钥匙串），
+/// conf 只在凭据库不可用时兜底。表单的「已保存密码 / 必填」提示以这里为准——
+/// 不能凭占位符猜，否则用户会以为输过密码，实际 rclone 发的是空密码
+/// （`attempted logon is invalid` 就是这么来的）。
 pub fn saved_password_ids(app: &AppHandle) -> std::collections::HashSet<String> {
-    let Ok(path) = crate::store::rclone_conf_path(app) else {
-        return Default::default();
-    };
-    let Ok(text) = std::fs::read_to_string(path) else {
-        return Default::default();
-    };
+    let conf_text = store::rclone_conf_path(app)
+        .and_then(|p| fs::read_to_string(p).map_err(|e| e.to_string()))
+        .unwrap_or_default();
     let mut out = std::collections::HashSet::new();
-    let mut cur: Option<String> = None;
+    for conn in crate::store::load_connections_raw(app) {
+        let section = remote_name(&conn.id);
+        if crate::credentials::get_password(app, &conn.id).is_some()
+            || section_pass(&conf_text, &section).is_some()
+        {
+            out.insert(conn.id);
+        }
+    }
+    out
+}
+
+/// 取 conf 里某 section 的 pass / secret_access_key 值（兜底路径用）
+fn section_pass(text: &str, section: &str) -> Option<String> {
+    let mut cur = String::new();
+    let mut out = None;
     for line in text.lines() {
         let t = line.trim();
         if t.starts_with('[') && t.ends_with(']') {
-            let name = &t[1..t.len() - 1];
-            cur = name.strip_prefix("rmm_").map(|s| s.to_string());
+            cur = t[1..t.len() - 1].to_string();
             continue;
         }
-        if let Some(id) = &cur {
-            if let Some((key, val)) = t.split_once('=') {
-                let key = key.trim();
-                if (key == "pass" || key == "secret_access_key") && !val.trim().is_empty() {
-                    out.insert(id.clone());
+        if cur == section {
+            // 兼容 `pass = x` / `pass=x` 两种写法（用户可能手改过 conf）
+            if let Some((k, v)) = t.split_once('=') {
+                let k = k.trim();
+                if (k == "pass" || k == "secret_access_key") && !v.trim().is_empty() {
+                    out = Some(v.trim().to_string());
                 }
             }
         }
     }
     out
+}
+
+/// 重写某 section 的密码行：`Some(line)` = 删掉旧 pass/secret 行后注入这一行，
+/// `None` = 把密码行从这一节里删掉。其它 section 原样保留。
+fn rewrite_section_pass(text: &str, section: &str, inject: Option<String>) -> String {
+    let mut out: Vec<String> = Vec::new();
+    let mut cur = String::new();
+    let mut injected = false;
+    for line in text.lines() {
+        let t = line.trim();
+        if t.starts_with('[') && t.ends_with(']') {
+            // 上一节到此为止：该注入还没注入就补在节尾
+            if cur == section && !injected {
+                if let Some(l) = &inject {
+                    out.push(l.clone());
+                }
+                injected = true;
+            }
+            cur = t[1..t.len() - 1].to_string();
+            out.push(line.to_string());
+            continue;
+        }
+        if cur == section {
+            // 本节里的旧密码行一律拿掉（要注入的稍后统一补）
+            if let Some((k, _)) = t.split_once('=') {
+                let k = k.trim();
+                if k == "pass" || k == "secret_access_key" {
+                    continue;
+                }
+            }
+        }
+        out.push(line.to_string());
+    }
+    if cur == section && !injected {
+        if let Some(l) = &inject {
+            out.push(l.clone());
+        }
+    }
+    let mut s = out.join("\n");
+    if !s.is_empty() && !s.ends_with('\n') {
+        s.push('\n');
+    }
+    s
+}
+
+/// 带密码的「会话配置」：持久 conf 里不落密码（密码在系统凭据库），
+/// 每次起 rclone / 探测 / 查容量时，把密码注入这份临时 conf 再交给 `--config`。
+/// 每个连接一份、内容按连接隔离；应用退出 / 卸载 / 删除连接时清理。
+pub fn session_conf_path(app: &AppHandle, id: &str) -> Result<PathBuf, String> {
+    let dir = store::config_dir(app)?.join("session");
+    fs::create_dir_all(&dir).map_err(|e| format!("创建会话配置目录失败：{e}"))?;
+    Ok(dir.join(format!("{}.conf", remote_name(id))))
+}
+
+/// 生成（或刷新）某连接的会话 conf，返回路径。
+///
+/// 顺带做迁移：持久 conf 里还留着旧版密码而凭据库没有时，搬进凭据库、从 conf 删掉。
+/// 凭据库不可用时回退：conf 里的密码原样保留，会话 conf = 持久 conf 的拷贝。
+pub fn session_conf(app: &AppHandle, conn: &Connection) -> Result<PathBuf, String> {
+    let conf_path = store::rclone_conf_path(app)?;
+    let mut text = fs::read_to_string(&conf_path).unwrap_or_default();
+    let section = remote_name(&conn.id);
+
+    // 旧版迁移：conf 有密码、凭据库没有 → 搬进凭据库并从 conf 清掉
+    if let Some(p) = section_pass(&text, &section) {
+        if crate::credentials::get_password(app, &conn.id).is_none() {
+            if crate::credentials::set_password(app, &conn.id, &p).is_ok() {
+                text = rewrite_section_pass(&text, &section, None);
+                store::write_atomic(&conf_path, &text)?;
+            }
+        }
+    }
+
+    let obscured = crate::credentials::get_password(app, &conn.id)
+        // 凭据库失败时的兜底：conf 里可能还有（write_remote 写进去的）
+        .or_else(|| section_pass(&text, &section));
+
+    let out_path = session_conf_path(app, &conn.id)?;
+    let content = match obscured {
+        Some(p) => {
+            let key = if conn.protocol.is_s3() {
+                "secret_access_key"
+            } else {
+                "pass"
+            };
+            rewrite_section_pass(&text, &section, Some(format!("{key} = {p}")))
+        }
+        None => text,
+    };
+    // 探测每 15 秒就会调一次，内容没变就不重写（省掉无谓的写盘与 .bak 翻滚）
+    let same = fs::read_to_string(&out_path)
+        .map(|old| old == content)
+        .unwrap_or(false);
+    if !same {
+        store::write_atomic(&out_path, &content)?;
+    }
+    Ok(out_path)
+}
+
+/// 删掉某连接的会话 conf（卸载 / 删除连接时调用，尽力而为）
+pub fn delete_session_conf(app: &AppHandle, id: &str) {
+    if let Ok(p) = session_conf_path(app, id) {
+        let _ = fs::remove_file(p);
+    }
 }
 
 /// 拼出 `rclone mount` / `rclone lsd` 用的远程路径（`remote:sub/path`）。
@@ -69,6 +185,13 @@ pub fn remote_spec(conn: &Connection) -> String {
 /// 老版本把共享名写进了 conf 的 `path = ...`（rclone 各后端都没有这个键），
 /// 升级后统一改成写进远程路径。这里把残留的清掉，避免 rclone 报未知配置项。
 pub fn migrate_legacy_conf(app: &AppHandle) -> Result<(), String> {
+    // 会话 conf 是上次运行的陈旧产物（里面可能带密码），启动先清空，需要时懒生成
+    if let Ok(dir) = store::config_dir(app).map(|d| d.join("session")) {
+        if dir.is_dir() {
+            let _ = fs::remove_dir_all(&dir);
+        }
+    }
+
     let conf_path = store::rclone_conf_path(app)?;
     let Ok(existing) = fs::read_to_string(&conf_path) else {
         return Ok(());
@@ -102,8 +225,34 @@ pub fn migrate_legacy_conf(app: &AppHandle) -> Result<(), String> {
         }
         out.push(line.to_string());
     }
-    if changed {
-        store::write_atomic(&conf_path, &out.join("\n"))?;
+
+    // 密码迁移：conf 里的 pass → 系统凭据库（迁移成功才从 conf 里删；
+    // 凭据库不可用时保留在 conf，行为与旧版一致）
+    let text = if changed { out.join("\n") } else { existing.clone() };
+    let mut text = text;
+    let mut migrated = false;
+    for c in store::load_connections_raw(app) {
+        let section = remote_name(&c.id);
+        if let Some(p) = section_pass(&text, &section) {
+            let stored = crate::credentials::get_password(app, &c.id);
+            match stored {
+                None => {
+                    if crate::credentials::set_password(app, &c.id, &p).is_ok() {
+                        text = rewrite_section_pass(&text, &section, None);
+                        migrated = true;
+                    }
+                }
+                Some(existing_p) if existing_p == p => {
+                    // 两边都有且一致：以凭据库为准，conf 里这份清掉
+                    text = rewrite_section_pass(&text, &section, None);
+                    migrated = true;
+                }
+                _ => {}
+            }
+        }
+    }
+    if changed || migrated {
+        store::write_atomic(&conf_path, &text)?;
     }
     Ok(())
 }
@@ -291,10 +440,6 @@ fn write_remote(
     conn: &Connection,
     source: PasswordSource<'_>,
 ) -> Result<(), String> {
-    let plain_password = match &source {
-        PasswordSource::Plain(p) => *p,
-        PasswordSource::Obscured(_) => None,
-    };
     let conf_path = store::rclone_conf_path(app)?;
     let existing = fs::read_to_string(&conf_path).unwrap_or_default();
     let section = remote_name(&conn.id);
@@ -312,8 +457,11 @@ fn write_remote(
             }
         }
         if skipping {
-            if trimmed.starts_with("pass =") || trimmed.starts_with("secret_access_key =") {
-                old_pass = Some(trimmed.to_string());
+            if let Some((k, v)) = trimmed.split_once('=') {
+                let k = k.trim();
+                if (k == "pass" || k == "secret_access_key") && !v.trim().is_empty() {
+                    old_pass = Some(v.trim().to_string());
+                }
             }
             continue;
         }
@@ -348,26 +496,6 @@ fn write_remote(
             if !conn.user.is_empty() {
                 body.push(format!("access_key_id = {}", conn.user));
             }
-            match (&source, plain_password) {
-                (PasswordSource::Plain(Some(p)), _) if !p.is_empty() => {
-                    body.push(format!("secret_access_key = {}", obscure(app, p)?))
-                }
-                (PasswordSource::Obscured(Some(o)), _) if !o.is_empty() => {
-                    body.push(format!("secret_access_key = {o}"))
-                }
-                _ => {
-                    if let Some(keep) = &old_pass {
-                        body.push(keep.clone());
-                    }
-                }
-            }
-            let mut text = kept.join("\n");
-            if !text.is_empty() {
-                text.push_str("\n\n");
-            }
-            text.push_str(&body.join("\n"));
-            text.push('\n');
-            return store::write_atomic(&conf_path, &text);
         }
         Protocol::Webdav => {
             body.push(format!(
@@ -392,17 +520,49 @@ fn write_remote(
     if !conn.user.is_empty() && !conn.protocol.is_s3() {
         body.push(format!("user = {}", conn.user));
     }
+    // SMB 域 / 工作组：微软账户（MicrosoftAccount）和域环境认证需要；
+    // 留空就不写，rclone 用默认工作组（老机器是 WORKGROUP）
+    if conn.protocol == Protocol::Smb && !conn.domain.trim().is_empty() {
+        body.push(format!("domain = {}", conn.domain.trim()));
+    }
+    // ---- 密码：主存系统凭据库，conf 只在凭据库不可用时兜底 ----
+    //
+    // 新密码（明文 / 已混淆）先尝试进凭据库：成功则 conf 里**不写**密码，
+    // 旧密码行一并清掉；失败（Linux 无凭据服务等）回退为写进 conf——行为与
+    // 旧版一致。编辑时没输新密码：凭据库里有就顺手把 conf 里的旧密码迁走。
+    let secret_key = if conn.protocol.is_s3() {
+        "secret_access_key"
+    } else {
+        "pass"
+    };
+    let mut fallback_pass: Option<String> = old_pass.clone();
     match &source {
-        PasswordSource::Plain(Some(pass)) if !pass.is_empty() => {
-            body.push(format!("pass = {}", obscure(app, pass)?));
+        PasswordSource::Plain(Some(p)) if !p.is_empty() => {
+            let obscured = obscure(app, p)?;
+            if crate::credentials::set_password(app, &conn.id, &obscured).is_ok() {
+                fallback_pass = None;
+            } else {
+                fallback_pass = Some(obscured);
+            }
         }
         PasswordSource::Obscured(Some(o)) if !o.is_empty() => {
-            body.push(format!("pass = {o}"));
+            if crate::credentials::set_password(app, &conn.id, o).is_ok() {
+                fallback_pass = None;
+            } else {
+                fallback_pass = Some(o.clone());
+            }
         }
         _ => {
-            // 编辑连接时没重新输入密码，沿用 rclone.conf 里已有的
-            if let Some(keep) = old_pass {
-                body.push(keep);
+            // 没输新密码：凭据库里有存量的话，conf 里的旧密码可以迁走（置 None 会在
+            // 下面被 rewrite_section_pass 删掉）；没有就沿用 conf 里的（Linux 兜底路径）
+            if crate::credentials::get_password(app, &conn.id).is_some() {
+                fallback_pass = None;
+            } else if let Some(p) = old_pass.clone() {
+                // 升级场景：conf 里还留着旧密码、凭据库是空的，顺手搬过去，
+                // 下一次保存/挂载就完成迁移，不用等用户重新输入
+                if crate::credentials::set_password(app, &conn.id, &p).is_ok() {
+                    fallback_pass = None;
+                }
             }
         }
     }
@@ -413,12 +573,15 @@ fn write_remote(
     }
     text.push_str(&body.join("\n"));
     text.push('\n');
+    text = rewrite_section_pass(&text, &section, fallback_pass.map(|p| format!("{secret_key} = {p}")));
 
     store::write_atomic(&conf_path, &text)
 }
 
-/// 从 rclone.conf 里删掉对应 section（删除连接时调用）
+/// 从 rclone.conf 和系统凭据库里删掉某连接的所有痕迹（删除连接时调用）
 pub fn remove_remote(app: &AppHandle, id: &str) -> Result<(), String> {
+    crate::credentials::delete_password(app, id);
+    delete_session_conf(app, id);
     let conf_path = store::rclone_conf_path(app)?;
     let Ok(existing) = fs::read_to_string(&conf_path) else {
         return Ok(());
@@ -448,7 +611,8 @@ pub fn build_mount_args(
     log_path: &Path,
     rc_port: u16,
 ) -> Result<Vec<String>, String> {
-    let conf = store::rclone_conf_path(app)?;
+    // 密码在系统凭据库里，持久 conf 不带 pass —— 用注入过密码的会话配置
+    let conf = session_conf(app, conn)?;
     let spec = remote_spec(conn);
 
     let mut args: Vec<String> = vec![
@@ -680,7 +844,7 @@ pub fn target_taken(target: &str) -> bool {
 /// 不支持时会报 `about not supported`，由界面隐藏容量条而不是报错。
 pub fn about(app: &AppHandle, conn: &Connection, timeout_secs: u64) -> Result<(u64, u64, u64), String> {
     let rclone = find_rclone(app).ok_or_else(|| "未找到 rclone".to_string())?;
-    let conf = store::rclone_conf_path(app)?;
+    let conf = session_conf(app, conn)?;
     let spec = remote_spec(conn);
     let out = command_for(&rclone)
         .arg("about")
@@ -877,9 +1041,13 @@ pub fn reveal_password(app: &AppHandle, id: &str) -> Option<String> {
     Some(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
-/// 取出 rclone.conf 中该连接已混淆的密码原文（导出配置时随连接一起带走，
+/// 取出该连接已混淆的密码原文（导出配置时随连接一起带走，
 /// 明文密码永远不会出现在导出文件里）。
+/// 主来源是系统凭据库；conf 里还有旧密码（Linux 兜底 / 未迁移）时读 conf。
 pub fn raw_password(app: &AppHandle, id: &str) -> Option<String> {
+    if let Some(p) = crate::credentials::get_password(app, id) {
+        return Some(p);
+    }
     let conf_path = store::rclone_conf_path(app).ok()?;
     let text = fs::read_to_string(conf_path).ok()?;
     let section = remote_name(id);
@@ -951,7 +1119,7 @@ pub fn tail_log(path: &Path, max_lines: usize) -> String {
 /// 有休眠需求的连接请在表单里把「探测方式」改成轻量或仅进程。
 pub fn probe_latency(app: &AppHandle, conn: &Connection, timeout_secs: u64) -> Result<u64, String> {
     let rclone = find_rclone(app).ok_or_else(|| "未找到 rclone".to_string())?;
-    let conf = store::rclone_conf_path(app)?;
+    let conf = session_conf(app, conn)?;
     let spec = remote_spec(conn);
 
     let mut cmd = command_for(&rclone);

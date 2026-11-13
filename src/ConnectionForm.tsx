@@ -59,6 +59,8 @@ export default function ConnectionForm({ initial, env, t, onClose, onSaved }: Pr
   );
   const [path, setPath] = useState(initial?.path ?? "");
   const [user, setUser] = useState(initial?.user ?? "");
+  /** SMB 域 / 工作组：微软账户填 MicrosoftAccount，域环境填 NetBIOS 域名 */
+  const [domain, setDomain] = useState(initial?.domain ?? "");
   const [password, setPassword] = useState("");
   const [showPass, setShowPass] = useState(false);
   /** SMB / FTP 的匿名访问：勾了就不要求账号密码（rclone 不带凭据，服务端按 guest 放行） */
@@ -146,6 +148,7 @@ export default function ConnectionForm({ initial, env, t, onClose, onSaved }: Pr
       port,
       path,
       user,
+      domain,
       password,
       target,
       cache_dir: cacheDir,
@@ -175,6 +178,7 @@ export default function ConnectionForm({ initial, env, t, onClose, onSaved }: Pr
       port,
       path,
       user,
+      domain,
       password,
       target,
       cacheDir,
@@ -400,6 +404,19 @@ export default function ConnectionForm({ initial, env, t, onClose, onSaved }: Pr
           <span>{isS3 ? t("cf.accessKey") : t("cf.user")}</span>
           <input className="ctl" value={user} onChange={(e) => setUser(e.target.value)} autoComplete="off" />
         </label>
+
+        {protocol === "smb" && (
+          <label className="field">
+            <span>{t("cf.domain")}</span>
+            <input
+              className="ctl"
+              value={domain}
+              onChange={(e) => setDomain(e.target.value)}
+              placeholder={t("cf.domainPh")}
+              autoComplete="off"
+            />
+          </label>
+        )}
 
         <label className="field">
           <span>

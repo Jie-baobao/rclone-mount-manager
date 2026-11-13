@@ -1,6 +1,7 @@
 use crate::model::{Connection, DiagResult, Protocol};
 use crate::rclone;
 use std::net::{TcpStream, ToSocketAddrs};
+use std::path::PathBuf;
 use std::time::Duration;
 use tauri::AppHandle;
 
@@ -9,7 +10,7 @@ use tauri::AppHandle;
 ///   macOS   → macFUSE（内核扩展）或 FUSE-T（NFS 实现，不需要内核扩展）
 ///   Linux   → 内核自带的 FUSE 子系统 + libfuse（/dev/fuse），发行版一般已带
 /// 所以界面上不能写死「WinFsp」，得按实际平台显示。
-#[derive(serde::Serialize, Clone, Debug)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 pub struct MountDriver {
     /// 界面直接显示的名字：WinFsp / macFUSE / FUSE-T / FUSE 3 / FUSE
     pub name: String,
@@ -25,7 +26,7 @@ pub struct MountDriver {
 }
 
 /// 依赖环境自检结果，UI 启动时展示
-#[derive(serde::Serialize, Clone, Debug)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 pub struct EnvInfo {
     pub platform: String,
     /// 管理器自身版本（来自 Cargo.toml）
@@ -457,4 +458,25 @@ fn test_s3(conn: &Connection) -> DiagResult {
         },
         Err(e) => DiagResult::fail(format!("无法解析主机名：{e}"), url),
     }
+}
+
+// ---------------------------------------------------------------- 环境缓存
+
+/// 环境自检结果落盘缓存：启动先读它立刻显示（0 个子进程），
+/// 后台刷新完通过 `env-updated` 事件把新结果推给界面。
+/// 缓存里只有版本号和驱动状态，不含任何敏感信息。
+fn env_cache_path(app: &AppHandle) -> Result<PathBuf, String> {
+    crate::store::config_dir(app).map(|d| d.join("env_cache.json"))
+}
+
+pub fn load_env_cache(app: &AppHandle) -> Option<EnvInfo> {
+    let path = env_cache_path(app).ok()?;
+    let text = std::fs::read_to_string(path).ok()?;
+    serde_json::from_str(&text).ok()
+}
+
+pub fn save_env_cache(app: &AppHandle, info: &EnvInfo) -> Result<(), String> {
+    let path = env_cache_path(app)?;
+    let text = serde_json::to_string_pretty(info).map_err(|e| e.to_string())?;
+    crate::store::write_atomic(&path, &text)
 }

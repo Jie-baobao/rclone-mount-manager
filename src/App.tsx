@@ -175,6 +175,10 @@ export default function App() {
     events.onConnectionsChanged(() => {
       refresh();
     }).then((un) => unlisteners.push(un));
+    // 启动先拿到的是缓存的环境信息（0 子进程），后台刷新完成后推真实结果
+    events
+      .onEnvUpdated((env) => setEnv(env))
+      .then((un) => unlisteners.push(un));
     events.onTrayAction((action) => {
       if (action === "mount_all") void handleMountAll();
       if (action === "unmount_all") void handleUnmountAll();
@@ -712,9 +716,15 @@ export default function App() {
             {currentState?.last_error && !currentState.mounted && (
               <div className="alert">
                 <strong>{t("app.lastFail")}</strong>
-                {explainError(currentState.last_error, t) && (
-                  <p className="alert-hint">{explainError(currentState.last_error, t)}</p>
-                )}
+                {(() => {
+                  // 轻量探测只查端口，认证失败照样显示「正常」，
+                  // 得在报错旁边点破这一点，不然用户以为探测说正常就是网络好
+                  const hint = explainError(currentState.last_error, t);
+                  const probe =
+                    current.probe_mode === "light" ? t("err.lightProbe") : "";
+                  const all = [hint, probe].filter(Boolean).join(" ");
+                  return all ? <p className="alert-hint">{all}</p> : null;
+                })()}
                 <pre>{currentState.last_error}</pre>
               </div>
             )}

@@ -1,6 +1,7 @@
 mod autostart;
 mod bookmark;
 mod conflict;
+mod credentials;
 mod crypt;
 mod diag;
 mod model;
@@ -141,6 +142,8 @@ pub struct AppState {
     stats: Mutex<HashMap<String, StatsSnapshot>>,
     /// 上传/下载账本（按连接 id），每 5 秒采样时累加，定期落盘
     traffic: Mutex<HashMap<String, TrafficDay>>,
+    /// 近 7 天每日流量合计（上行, 下行）：给统计页的折线图用，定期落盘
+    traffic_hist: Mutex<store::TrafficHistory>,
     /// 「发送到」待处理请求：资源管理器传进来的文件在这里等着界面来取。
     /// 存一份而不是只发事件，是因为窗口可能还在托盘里、或者界面尚未加载完，
     /// 只发事件会直接丢掉这次请求。
@@ -168,6 +171,7 @@ impl Default for AppState {
             health: Mutex::new(HashMap::new()),
             stats: Mutex::new(HashMap::new()),
             traffic: Mutex::new(HashMap::new()),
+            traffic_hist: Mutex::new(HashMap::new()),
             send_req: Mutex::new(None),
             tray_ready: AtomicBool::new(false),
             locked: AtomicBool::new(false),
@@ -323,6 +327,7 @@ fn to_connection(input: &ConnectionInput, existing: Option<&Connection>) -> Conn
         // 之后由 rclone::remote_spec() 拼成 `remote:共享名/子目录`。
         path: input.path.trim().replace('\\', "/").trim_matches('/').to_string(),
         user: input.user.trim().to_string(),
+        domain: input.domain.trim().to_string(),
         target: normalize_target(&input.target),
         cache_dir: input.cache_dir.trim().to_string(),
         ignore_cert: input.ignore_cert,
@@ -555,7 +560,15 @@ fn start_session(app: &AppHandle, state: &AppState, conn: &Connection, restarts:
     ensure_mount_point(&conn.target)?;
 
     let rc_port = free_port();
-    let child = rclone::spawn_mount(app, conn, &log_path, rc_port)?;
+    // 挂载失败时把生成的会话配置删掉：里面带着从凭据库搬出来的密码，
+    // 进程都没起来就没必要留在磁盘上。
+    let child = match rclone::spawn_mount(app, conn, &log_path, rc_port) {
+        Ok(c) => c,
+        Err(e) => {
+            rclone::delete_session_conf(app, &conn.id);
+            return Err(e);
+        }
+    };
     let pid = child.id();
     state.sessions.lock().unwrap().insert(
         conn.id.clone(),
@@ -584,11 +597,32 @@ fn start_session(app: &AppHandle, state: &AppState, conn: &Connection, restarts:
 #[tauri::command]
 async fn get_env(app: AppHandle) -> diag::EnvInfo {
     // 版本号和驱动状态都要起子进程（rclone version、sc query，几百毫秒起步）。
-    // 放主线程上跑，窗口刚打开的那一下「点了没反应」就是它贡献的。
-    let app2 = app.clone();
-    match tauri::async_runtime::spawn_blocking(move || diag::env_info(&app2)).await {
-        Ok(info) => info,
-        Err(_) => diag::env_info(&app),
+    // 现在有落盘缓存：启动先读上次的结果立刻返回（0 个子进程），
+    // 后台刷新出真实结果后 emit env-updated，界面原地更新。
+    match diag::load_env_cache(&app) {
+        Some(cached) => {
+            let app2 = app.clone();
+            let _ = tauri::async_runtime::spawn_blocking(move || {
+                let info = diag::env_info(&app2);
+                let _ = diag::save_env_cache(&app2, &info);
+                let _ = app2.emit("env-updated", &info);
+            });
+            cached
+        }
+        None => {
+            // 首次运行没有缓存：算一次并落盘（这一下值得等，界面要靠它判断依赖齐不齐）
+            let app2 = app.clone();
+            match tauri::async_runtime::spawn_blocking(move || {
+                let info = diag::env_info(&app2);
+                let _ = diag::save_env_cache(&app2, &info);
+                info
+            })
+            .await
+            {
+                Ok(info) => info,
+                Err(_) => diag::env_info(&app),
+            }
+        }
     }
 }
 
@@ -1030,7 +1064,10 @@ fn unmount_blocking(app: AppHandle, id: String) -> Result<(), String> {
     let conn = store::load_connections(&app).into_iter().find(|c| c.id == id);
     let target = conn.as_ref().map(|c| c.target.clone()).unwrap_or_default();
     let name = conn.map(|c| c.name).unwrap_or_default();
-    rclone::unmount(&mut session.child, &target)?;
+    // 进程已经摘掉了，无论卸载是否报错，带密码的会话配置都没用了，先清
+    let unmounted = rclone::unmount(&mut session.child, &target);
+    rclone::delete_session_conf(&app, &id);
+    unmounted?;
     bookmark::sync(&target, &name, false);
     state.errors.lock().unwrap().remove(&id);
     state.health.lock().unwrap().remove(&id);
@@ -1109,6 +1146,7 @@ fn unmount_all_blocking(app: AppHandle) -> Result<usize, String> {
         let (target, name) = targets.get(&id).cloned().unwrap_or_default();
         let _ = rclone::unmount(&mut s.child, &target);
         bookmark::sync(&target, &name, false);
+        rclone::delete_session_conf(&app, &id);
         count += 1;
     }
     let _ = app.emit("state-changed", ());
@@ -1596,6 +1634,29 @@ fn traffic_summary(state: State<'_, AppState>) -> TrafficSummary {
     out
 }
 
+/// 统计页「近 7 天流量」折线图的数据：按天合计的上/下行字节数，日期升序
+#[derive(serde::Serialize)]
+pub struct TrafficPoint {
+    pub date: String,
+    pub up: u64,
+    pub down: u64,
+}
+
+#[tauri::command]
+fn traffic_history(state: State<'_, AppState>) -> Vec<TrafficPoint> {
+    let map = state.traffic_hist.lock().unwrap();
+    let mut out: Vec<TrafficPoint> = map
+        .iter()
+        .map(|(date, (up, down))| TrafficPoint {
+            date: date.clone(),
+            up: *up,
+            down: *down,
+        })
+        .collect();
+    out.sort_by(|a, b| a.date.cmp(&b.date));
+    out
+}
+
 /// 盘符/挂载点能不能用。前端在表单里实时调用，早点把冲突说清楚。
 #[derive(serde::Serialize)]
 pub struct TargetCheck {
@@ -1604,6 +1665,109 @@ pub struct TargetCheck {
     pub reason: String,
     /// 占用它的连接名（reason=other-connection 时有用）
     pub owner: String,
+}
+
+// ---------------------------------------------------------------- 诊断包
+
+/// 导出诊断包：把排障需要的材料打包成一个 zip，**不含任何密码**。
+/// 内容：环境信息、脱敏后的设置与连接列表、rclone.conf（密码行抹掉）、
+/// 每条连接最近 300 行挂载日志。返回 zip 的完整路径。
+#[tauri::command]
+async fn export_diagnostics(app: AppHandle) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || export_diagnostics_blocking(&app))
+        .await
+        .map_err(|e| format!("导出诊断包失败：{e}"))?
+}
+
+fn export_diagnostics_blocking(app: &AppHandle) -> Result<String, String> {
+    use std::io::Write;
+
+    let dir = store::config_dir(app)?;
+    let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
+    let zip_path = dir.join(format!("diagnostics-{stamp}.zip"));
+    let file = std::fs::File::create(&zip_path).map_err(|e| format!("创建诊断包失败：{e}"))?;
+    let mut zip = zip::ZipWriter::new(file);
+    let options =
+        zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+
+    let mut add = |name: &str, content: &str| -> Result<(), String> {
+        zip.start_file(name, options)
+            .and_then(|_| zip.write_all(content.as_bytes()))
+            .map_err(|e| format!("写入诊断包失败：{e}"))
+    };
+
+    // 环境信息：版本、平台、rclone、驱动
+    let env = diag::env_info(app);
+    let info = format!(
+        "Rclone Mount Manager 诊断包\n\
+         生成时间：{}\n\
+         应用版本：{}\n\
+         平台：{}\n\
+         rclone：{} {}（来源 {}，bundled={}）\n\
+         挂载驱动：{} {}（ready={}）\n\
+         驱动提示：{}\n",
+        chrono::Local::now().format("%Y-%m-%d %H:%M:%S"),
+        env.app_version,
+        env.platform,
+        env.rclone_version,
+        env.rclone_path,
+        env.rclone_source,
+        env.rclone_bundled,
+        env.driver.name,
+        env.driver.version,
+        env.driver.ready,
+        env.driver.hint,
+    );
+    add("info.txt", &info)?;
+
+    // 设置：锁屏口令哈希抹掉（无法还原成密码，但没必要带出去）
+    let mut settings = settings::load(app);
+    if settings.lock_hash.is_some() {
+        settings.lock_hash = Some("***".into());
+    }
+    add(
+        "settings.json",
+        &serde_json::to_string_pretty(&settings).unwrap_or_default(),
+    )?;
+
+    // 连接列表：本来就不含密码
+    add(
+        "connections.json",
+        &serde_json::to_string_pretty(&store::load_connections(app)).unwrap_or_default(),
+    )?;
+
+    // rclone.conf：pass / secret_access_key 行抹成占位，保留结构便于排查路径/域问题
+    if let Ok(conf) = store::rclone_conf_path(app)
+        .and_then(|p| std::fs::read_to_string(p).map_err(|e| e.to_string()))
+    {
+        let sanitized: Vec<String> = conf
+            .lines()
+            .map(|l| {
+                let t = l.trim();
+                if t.starts_with("pass =") || t.starts_with("secret_access_key =") {
+                    "（已隐藏）".to_string()
+                } else {
+                    l.to_string()
+                }
+            })
+            .collect();
+        let _ = add("rclone.conf.txt", &sanitized.join("\n"));
+    }
+
+    // 每条连接的挂载日志尾部（真实报错都在这里）
+    for c in store::load_connections(app) {
+        if let Ok(p) = store::mount_log_path(app, &c.id) {
+            if p.exists() {
+                let tail = rclone::tail_log(&p, 300);
+                if !tail.is_empty() {
+                    add(&format!("logs/{}.log", c.id), &tail)?;
+                }
+            }
+        }
+    }
+
+    zip.finish().map_err(|e| format!("生成诊断包失败：{e}"))?;
+    Ok(zip_path.to_string_lossy().to_string())
 }
 
 #[tauri::command]
@@ -2190,12 +2354,25 @@ fn spawn_stats_monitor(app: AppHandle) {
                 if let Some((delta, uploading)) = moved {
                     let mut ledger = state.traffic.lock().unwrap();
                     let day = traffic_entry(&mut ledger, &id);
+                    // 同一笔流量也记进「近 7 天」历史：首页的柱状图按天画线
+                    let date = day.date.clone();
                     if uploading {
                         day.up = day.up.saturating_add(delta);
                         day.total_up = day.total_up.saturating_add(delta);
                     } else {
                         day.down = day.down.saturating_add(delta);
                         day.total_down = day.total_down.saturating_add(delta);
+                    }
+                    drop(ledger);
+
+                    // 注意：不能写成 `let e = state.traffic_hist.lock().unwrap().entry(..)`，
+                    // 临时 MutexGuard 会在语句末尾被丢掉，e 活不到下一行。
+                    let mut hist = state.traffic_hist.lock().unwrap();
+                    let e = hist.entry(date).or_insert((0, 0));
+                    if uploading {
+                        e.0 = e.0.saturating_add(delta);
+                    } else {
+                        e.1 = e.1.saturating_add(delta);
                     }
                 }
             }
@@ -2204,9 +2381,31 @@ fn spawn_stats_monitor(app: AppHandle) {
             if ticks % 12 == 0 {
                 let snapshot = state.traffic.lock().unwrap().clone();
                 let _ = store::save_traffic(&app, &snapshot);
+                // 流量历史顺手落盘：只留最近 7 天
+                let hist: store::TrafficHistory = {
+                    let mut m = state.traffic_hist.lock().unwrap();
+                    // 不能写 `*m = prune_traffic_history(&m)`：同一语句里既有
+                    // 共享借用又有可变赋值，借用检查会拒
+                    let pruned = prune_traffic_history(&m);
+                    *m = pruned;
+                    m.clone()
+                };
+                let _ = store::save_traffic_history(&app, &hist);
             }
         }
     });
+}
+
+/// 剪掉 7 天以前的流量历史（日期字符串本身就是排序键）
+fn prune_traffic_history(h: &store::TrafficHistory) -> store::TrafficHistory {
+    let mut keys: Vec<&String> = h.keys().collect();
+    keys.sort();
+    keys.reverse();
+    let keep: std::collections::HashSet<&String> = keys.into_iter().take(7).collect();
+    h.iter()
+        .filter(|(k, _)| keep.contains(*k))
+        .map(|(k, v)| (k.clone(), *v))
+        .collect()
 }
 
 /// 周期性主动探测已挂载连接：把「网络波动」变成看得见的黄灯。
@@ -2547,6 +2746,10 @@ pub fn run() {
             let ledger = store::load_traffic(app.handle());
             *app.state::<AppState>().traffic.lock().unwrap() = ledger;
 
+            // 载入近 7 天流量历史（统计页的流量折线图）
+            let traffic_hist = store::load_traffic_history(app.handle());
+            *app.state::<AppState>().traffic_hist.lock().unwrap() = traffic_hist;
+
             // 载入探测历史（7 天），详情页的「7 天」视图直接读它
             let history = store::load_history(app.handle());
             *app.state::<AppState>().history.lock().unwrap() = history;
@@ -2664,6 +2867,8 @@ pub fn run() {
             disk_usage,
             latency_history,
             traffic_summary,
+            traffic_history,
+            export_diagnostics,
             check_target,
             pending_conflicts,
             resolve_target_conflicts,

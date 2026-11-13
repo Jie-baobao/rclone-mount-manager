@@ -21,6 +21,8 @@ export interface Connection {
   port: number;
   path: string;
   user: string;
+  /** SMB 域 / 工作组（可空） */
+  domain: string;
   target: string;
   cache_dir: string;
   ignore_cert: boolean;
@@ -58,6 +60,7 @@ export interface ConnectionInput {
   port?: number | null;
   path: string;
   user: string;
+  domain: string;
   password: string;
   target: string;
   cache_dir: string;
@@ -194,6 +197,13 @@ export interface TrafficSummary {
   today_down: number;
   total_up: number;
   total_down: number;
+}
+
+/** 近 7 天某天的流量合计（字节） */
+export interface TrafficPoint {
+  date: string;
+  up: number;
+  down: number;
 }
 
 /** 盘符/挂载点占用检查结果 */
@@ -384,6 +394,10 @@ export const api = {
   diskUsage: (id: string) => call<DiskUsage>("disk_usage", { id }),
   /** 探测历史，hours=24 为今天、168 为 7 天 */
   latencyHistory: (id: string, hours: number) => call<HistoryPoint[]>("latency_history", { id, hours }),
+  /** 近 7 天每日流量合计（上行/下行分开），日期升序 */
+  trafficHistory: () => call<TrafficPoint[]>("traffic_history"),
+  /** 导出诊断包（日志+脱敏配置打包成 zip），返回 zip 完整路径 */
+  exportDiagnostics: () => call<string>("export_diagnostics"),
   installRclone: (version: string) => call<string>("install_rclone", { version }),
   installWinfsp: () => call<string>("install_winfsp"),
   openUrl: (url: string) => call<void>("open_url", { url }),
@@ -457,6 +471,9 @@ export const events = {
   /** 管理器自身更新包的下载进度 */
   onUpdateProgress: (cb: (p: UpdateProgress) => void): Promise<UnlistenFn> =>
     isMock() ? mockListen() : listen<UpdateProgress>("update-progress", (e) => cb(e.payload)),
+  /** 启动时先返回缓存的环境信息，后台刷新完成后推新结果 */
+  onEnvUpdated: (cb: (env: EnvInfo) => void): Promise<UnlistenFn> =>
+    isMock() ? mockListen() : listen<EnvInfo>("env-updated", (e) => cb(e.payload)),
 };
 
 /** 更新包下载进度：done=true 表示下载完成、正在启动安装 */

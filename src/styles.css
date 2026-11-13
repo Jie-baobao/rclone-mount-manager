@@ -2089,3 +2089,68 @@ input::-webkit-credentials-auto-fill-button {
   font-size: 11.5px;
   line-height: 1.5;
 }
+
+/* 近 7 天流量柱状图（首页流量面板里，TrafficBar 下面） */
+.tchart {
+  margin-top: 12px;
+}
+.tchart-legend {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  margin-bottom: 8px;
+}
+.tchart-max {
+  margin-left: auto;
+}
+.tchart-sw {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  margin-right: 5px;
+  vertical-align: -1px;
+}
+.tchart-sw.up {
+  background: #4c8dd0;
+}
+.tchart-sw.down {
+  background: #3aa27c;
+}
+.tchart-bars {
+  display: flex;
+  gap: 12px;
+  align-items: stretch;
+  height: 120px;
+}
+.tchart-day {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  height: 100%;
+}
+.tchart-cols {
+  display: flex;
+  gap: 4px;
+  align-items: flex-end;
+  height: 100%;
+  flex: 1;
+}
+.tchart-bar {
+  display: block;
+  width: 14px;
+  border-radius: 4px 4px 0 0;
+  background: var(--color-text-tertiary);
+}
+.tchart-bar.up {
+  background: #4c8dd0;
+}
+.tchart-bar.down {
+  background: #3aa27c;
+}
+.tchart-label {
+  font-size: 11px;
+  color: var(--color-text-tertiary);
+}
