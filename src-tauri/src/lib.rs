@@ -581,8 +581,14 @@ fn start_session(app: &AppHandle, state: &AppState, conn: &Connection, restarts:
 // ---------------------------------------------------------------- 命令
 
 #[tauri::command]
-fn get_env(app: AppHandle) -> diag::EnvInfo {
-    diag::env_info(&app)
+async fn get_env(app: AppHandle) -> diag::EnvInfo {
+    // 版本号和驱动状态都要起子进程（rclone version、sc query，几百毫秒起步）。
+    // 放主线程上跑，窗口刚打开的那一下「点了没反应」就是它贡献的。
+    let app2 = app.clone();
+    match tauri::async_runtime::spawn_blocking(move || diag::env_info(&app2)).await {
+        Ok(info) => info,
+        Err(_) => diag::env_info(&app),
+    }
 }
 
 #[tauri::command]
@@ -598,11 +604,23 @@ fn list_connections(app: AppHandle) -> Vec<Connection> {
 }
 
 #[tauri::command]
-fn save_connection(
+async fn save_connection(
     app: AppHandle,
-    state: State<'_, AppState>,
     input: ConnectionInput,
 ) -> Result<Connection, String> {
+    // 同步命令跑在主线程上：保存时可能还要停旧进程 + 重新挂载（各要几百毫秒），
+    // 主线程一堵整个窗口就「假死」。整体挪到后台线程。
+    let res = tauri::async_runtime::spawn_blocking(move || save_connection_blocking(app, input))
+        .await
+        .map_err(|e| format!("保存失败：{e}"))?;
+    res
+}
+
+fn save_connection_blocking(
+    app: AppHandle,
+    input: ConnectionInput,
+) -> Result<Connection, String> {
+    let state = app.state::<AppState>();
     if input.name.trim().is_empty() {
         return Err("请填写连接名称".into());
     }
@@ -736,25 +754,34 @@ fn reset_stats(state: State<'_, AppState>, id: String) -> Result<(), String> {
 /// 轻量探测只测 TCP 握手（不到 1ms，不代表读写延迟），用户想看真实数字时点一下这个。
 /// 由用户主动触发、只跑一次，不会像定时探测那样把休眠硬盘反复唤醒。
 #[tauri::command]
-fn probe_now(app: AppHandle, id: String) -> Result<u64, String> {
-    let list = store::load_connections(&app);
+async fn probe_now(app: AppHandle, id: String) -> Result<u64, String> {
+    // 完整探测是真实的 `rclone lsd`，最长能跑 8 秒 —— 主线程上等它，详情页就僵住了
+    let app2 = app.clone();
+    let res = tauri::async_runtime::spawn_blocking(move || probe_now_blocking(&app2, &id))
+        .await
+        .map_err(|e| format!("探测失败：{e}"))?;
+    res
+}
+
+fn probe_now_blocking(app: &AppHandle, id: &str) -> Result<u64, String> {
+    let list = store::load_connections(app);
     let conn = list
         .iter()
         .find(|c| c.id == id)
         .ok_or_else(|| "连接不存在".to_string())?;
-    let cfg = settings::load(&app);
+    let cfg = settings::load(app);
     let started = std::time::Instant::now();
-    let result = rclone::probe_latency(&app, conn, 8);
+    let result = rclone::probe_latency(app, conn, 8);
     match &result {
         Ok(us) => append_probe_log(
-            &app,
-            &id,
+            app,
+            id,
             &cfg,
             &format!("[手动探测 {}] 完整探测 · {}", timestamp(), fmt_ms(*us)),
         ),
         Err(e) => append_probe_log(
-            &app,
-            &id,
+            app,
+            id,
             &cfg,
             &format!(
                 "[手动探测 {}] 失败（{:.1}s）· {}",
@@ -868,7 +895,16 @@ fn set_pinned(app: AppHandle, id: String, pinned: bool) -> Result<(), String> { 
 }
 
 #[tauri::command]
-fn delete_connection(app: AppHandle, state: State<'_, AppState>, id: String) -> Result<(), String> {
+async fn delete_connection(app: AppHandle, id: String) -> Result<(), String> {
+    // 删除时可能正挂载着：要先 kill + wait 挂载进程 —— 后台线程跑
+    let res = tauri::async_runtime::spawn_blocking(move || delete_connection_blocking(app, id))
+        .await
+        .map_err(|e| format!("删除失败：{e}"))?;
+    res
+}
+
+fn delete_connection_blocking(app: AppHandle, id: String) -> Result<(), String> {
+    let state = app.state::<AppState>();
     // 先记住挂载点和名字：连接马上要删，之后就没处查了
     let gone = store::load_connections(&app)
         .into_iter()
@@ -894,7 +930,17 @@ fn delete_connection(app: AppHandle, state: State<'_, AppState>, id: String) -> 
 }
 
 #[tauri::command]
-fn mount(app: AppHandle, state: State<'_, AppState>, id: String) -> Result<MountState, String> {
+async fn mount(app: AppHandle, id: String) -> Result<MountState, String> {
+    // 主线程杀手：起 rclone 进程 + sleep(900ms) 等它活下来 + 重建托盘 / 发送到菜单。
+    // 同步命令整个跑在主线程上，挂载那一两秒窗口就是「假死」——挪到后台线程。
+    let res = tauri::async_runtime::spawn_blocking(move || mount_blocking(app, id))
+        .await
+        .map_err(|e| format!("挂载失败：{e}"))?;
+    res
+}
+
+fn mount_blocking(app: AppHandle, id: String) -> Result<MountState, String> {
+    let state = app.state::<AppState>();
     // 锁屏时不放行：托盘菜单能触发挂载，但界面被锁的窗口期不该有新的盘被挂上来
     if state.locked.load(Ordering::SeqCst) {
         return Err("软件已锁定，请先输入密码解锁".into());
@@ -964,7 +1010,16 @@ fn mount(app: AppHandle, state: State<'_, AppState>, id: String) -> Result<Mount
 }
 
 #[tauri::command]
-fn unmount(app: AppHandle, state: State<'_, AppState>, id: String) -> Result<(), String> {
+async fn unmount(app: AppHandle, id: String) -> Result<(), String> {
+    // 卸载要 kill + wait 挂载进程、写流量账本、重建托盘 —— 同样别堵主线程
+    let res = tauri::async_runtime::spawn_blocking(move || unmount_blocking(app, id))
+        .await
+        .map_err(|e| format!("卸载失败：{e}"))?;
+    res
+}
+
+fn unmount_blocking(app: AppHandle, id: String) -> Result<(), String> {
+    let state = app.state::<AppState>();
     let mut session = state
         .sessions
         .lock()
@@ -991,7 +1046,16 @@ fn unmount(app: AppHandle, state: State<'_, AppState>, id: String) -> Result<(),
 
 /// 一键挂载全部未挂载的连接（不阻塞界面，逐个起、结果通过事件回报）
 #[tauri::command]
-fn mount_all(app: AppHandle, state: State<'_, AppState>) -> Result<usize, String> {
+async fn mount_all(app: AppHandle) -> Result<usize, String> {
+    // 逐个起进程 + 盘符冲突扫描，几条连接叠加起来就是肉眼可见的卡顿
+    let res = tauri::async_runtime::spawn_blocking(move || mount_all_blocking(app))
+        .await
+        .map_err(|e| format!("批量挂载失败：{e}"))?;
+    res
+}
+
+fn mount_all_blocking(app: AppHandle) -> Result<usize, String> {
+    let state = app.state::<AppState>();
     if state.locked.load(Ordering::SeqCst) {
         return Err("软件已锁定，请先输入密码解锁".into());
     }
@@ -1024,7 +1088,16 @@ fn mount_all(app: AppHandle, state: State<'_, AppState>) -> Result<usize, String
 }
 
 #[tauri::command]
-fn unmount_all(app: AppHandle, state: State<'_, AppState>) -> Result<usize, String> {
+async fn unmount_all(app: AppHandle) -> Result<usize, String> {
+    // 每条都要 kill + wait 挂载进程，几条叠加也是半秒以上 —— 后台线程跑
+    let res = tauri::async_runtime::spawn_blocking(move || unmount_all_blocking(app))
+        .await
+        .map_err(|e| format!("批量卸载失败：{e}"))?;
+    res
+}
+
+fn unmount_all_blocking(app: AppHandle) -> Result<usize, String> {
+    let state = app.state::<AppState>();
     let drained: Vec<(String, Session)> = state.sessions.lock().unwrap().drain().collect();
     let targets: HashMap<String, (String, String)> = store::load_connections(&app)
         .into_iter()
