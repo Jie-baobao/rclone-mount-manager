@@ -355,6 +355,13 @@ fn to_connection(input: &ConnectionInput, existing: Option<&Connection>) -> Conn
         extra_args: input.extra_args.trim().to_string(),
         created_at: existing.map(|c| c.created_at).unwrap_or_else(now_secs),
         has_password: existing.map(|c| c.has_password).unwrap_or(false),
+        crypt: input.crypt,
+        crypt_filename: match input.crypt_filename.as_str() {
+            "obfuscate" | "off" => input.crypt_filename.clone(),
+            _ => "standard".into(),
+        },
+        crypt_dir_names: input.crypt_dir_names,
+        has_crypt_password: existing.map(|c| c.has_crypt_password).unwrap_or(false),
     }
 }
 
@@ -551,7 +558,7 @@ fn start_session(app: &AppHandle, state: &AppState, conn: &Connection, restarts:
     let _ = std::fs::write(&log_path, "");
     // 每次启动都按连接信息重写一遍 remote：老版本写坏的配置（例如把 WebDAV 地址拼成
     // http://5005//192.168.50.4）不用用户重新编辑连接就能自愈。密码沿用已有值。
-    let _ = rclone::upsert_remote(app, conn, None);
+    let _ = rclone::upsert_remote(app, conn, None, rclone::CryptInput::keep());
 
     // Unix 的 FUSE 挂载要求挂载点目录已经存在（Windows 盘符由系统管，不需要），
     // 缺了 rclone 会直接 CRITICAL: cannot open: /mnt/nas: no such file or directory。
@@ -701,12 +708,40 @@ fn save_connection_blocking(
 
     let conn = to_connection(&input, idx.map(|i| &list[i]));
 
+    // 加密目录必须有密码：新输的、或之前存过的。都没有就别往下走——
+    // 否则会写出一份解不开任何东西的 crypt 段，比直接报错更糟。
+    let had_crypt_pw = idx.map(|i| list[i].has_crypt_password).unwrap_or(false);
+    if conn.crypt
+        && input.crypt_password.trim().is_empty()
+        && !had_crypt_pw
+        && !input.crypt_clear
+    {
+        return Err("开启加密目录需要设置加密密码（丢了就打不开已有数据，请记牢）".into());
+    }
+    if conn.crypt && input.crypt_clear {
+        return Err("清除加密密码前请先关掉加密目录".into());
+    }
+
     let plain = if input.password.is_empty() {
         None
     } else {
         Some(input.password.as_str())
     };
-    rclone::upsert_remote(&app, &conn, plain)?;
+    let crypt_in = rclone::CryptInput {
+        password: if input.crypt_password.trim().is_empty() {
+            None
+        } else {
+            Some(input.crypt_password.trim())
+        },
+        salt: if input.crypt_salt.trim().is_empty() {
+            None
+        } else {
+            Some(input.crypt_salt.trim())
+        },
+        clear: input.crypt_clear,
+        ..Default::default()
+    };
+    rclone::upsert_remote(&app, &conn, plain, crypt_in)?;
 
     match idx {
         Some(i) => list[i] = conn.clone(),
@@ -729,7 +764,11 @@ fn save_connection_blocking(
     }
     // 名字/分组/盘符都可能改了，菜单文字要跟着变
     sync_sendto_menu(&app);
-    Ok(conn)
+    // 「密码是否已保存」以落盘后的真实状态为准再下发一次：刚输的密码要立刻变成「已保存」
+    Ok(store::load_connections(&app)
+        .into_iter()
+        .find(|c| c.id == conn.id)
+        .unwrap_or(conn))
 }
 
 /// 详情页「节点历史」的数据源：本次挂载的吞吐、峰值、探测成功率、延迟曲线
@@ -1535,6 +1574,15 @@ fn export_connections(app: AppHandle, password: Option<String>) -> Result<String
                     "password_obscured".into(),
                     serde_json::Value::String(rclone::raw_password(&app, &c.id).unwrap_or_default()),
                 );
+                // 加密目录的密码一起带走，否则换机导入后 crypt 段解不开已有数据
+                if c.crypt {
+                    obj.insert(
+                        "crypt_password_obscured".into(),
+                        serde_json::Value::String(
+                            rclone::raw_crypt_password(&app, &c.id).unwrap_or_default(),
+                        ),
+                    );
+                }
             }
             v
         })
@@ -1589,6 +1637,10 @@ fn import_connections(
             .and_then(|v| v.as_str())
             .filter(|s| !s.is_empty())
             .map(|s| s.to_string());
+        let crypt_obscured = item
+            .get("crypt_password_obscured")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty());
 
         // 名称冲突的条目跳过，避免把现有配置搅乱
         if list.iter().any(|c| c.name == conn.name) {
@@ -1597,7 +1649,15 @@ fn import_connections(
         conn.id = new_id();
         conn.created_at = now_secs();
         conn.pinned = false;
-        rclone::upsert_remote_obscured(&app, &conn, obscured.as_deref())?;
+        rclone::upsert_remote_obscured(
+            &app,
+            &conn,
+            obscured.as_deref(),
+            rclone::CryptInput {
+                obscured: crypt_obscured,
+                ..Default::default()
+            },
+        )?;
         list.push(conn);
         imported += 1;
     }
@@ -1738,16 +1798,23 @@ fn export_diagnostics_blocking(app: &AppHandle) -> Result<String, String> {
         &serde_json::to_string_pretty(&store::load_connections(app)).unwrap_or_default(),
     )?;
 
-    // rclone.conf：pass / secret_access_key 行抹成占位，保留结构便于排查路径/域问题
+    // rclone.conf：密码类配置行抹成占位（保留键名，便于排查「到底配没配」），结构原样保留
     if let Ok(conf) = store::rclone_conf_path(app)
         .and_then(|p| std::fs::read_to_string(p).map_err(|e| e.to_string()))
     {
         let sanitized: Vec<String> = conf
             .lines()
             .map(|l| {
-                let t = l.trim();
-                if t.starts_with("pass =") || t.starts_with("secret_access_key =") {
-                    "（已隐藏）".to_string()
+                let key = l
+                    .split_once('=')
+                    .map(|(k, _)| k.trim())
+                    .filter(|k| !k.starts_with('['))
+                    .unwrap_or("");
+                if matches!(
+                    key,
+                    "pass" | "secret_access_key" | "password" | "password2"
+                ) {
+                    format!("{key} = （已隐藏）")
                 } else {
                     l.to_string()
                 }

@@ -935,6 +935,55 @@ input[type="number"].ctl {
   margin-bottom: 10px;
 }
 
+/* 加密目录的标识：列表项与详情页标题上的小锁 */
+.crypt-mark {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 6px;
+  color: var(--warn);
+  vertical-align: -1px;
+}
+
+/* 加密目录：默认收起，勾了才展开；展开后左侧一道警示色，提醒这是进阶设置 */.crypt-box {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+}
+
+.crypt-box.on {
+  border-style: solid;
+  border-color: color-mix(in srgb, var(--warn) 45%, var(--border));
+  background: color-mix(in srgb, var(--warn) 4%, transparent);
+}
+
+.crypt-tag {
+  margin-left: 6px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-size: 10.5px;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  background: var(--panel);
+}
+
+.crypt-body {
+  margin-top: 10px;
+}
+
+.crypt-body .form-grid {
+  margin-top: 8px;
+}
+
+.crypt-warn {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 6px;
+  color: var(--warn);
+  border: 1px solid color-mix(in srgb, var(--warn) 35%, transparent);
+  background: color-mix(in srgb, var(--warn) 7%, transparent);
+}
+
 .diag {
   margin-top: 12px;
   padding: 10px 12px;

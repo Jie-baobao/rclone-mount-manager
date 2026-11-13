@@ -117,6 +117,27 @@ pub struct Connection {
     /// 反序列化缺省 false，老配置文件无需迁移。
     #[serde(default)]
     pub has_password: bool,
+    /// 加密目录（rclone crypt）：挂载点里看到明文，底层存的是密文。
+    /// 默认关——这是高级功能，对已有明文的目录打开会让原文件「看起来」变成乱码。
+    #[serde(default)]
+    pub crypt: bool,
+    /// crypt 文件名加密方式：standard（默认）/ obfuscate / off
+    #[serde(default = "default_crypt_filename")]
+    pub crypt_filename: String,
+    /// crypt 是否连目录名一起加密（默认 true）
+    #[serde(default = "default_true")]
+    pub crypt_dir_names: bool,
+    /// 是否已保存过加密密码（与 `has_password` 同理，密码本身在凭据库里）
+    #[serde(default)]
+    pub has_crypt_password: bool,
+}
+
+fn default_crypt_filename() -> String {
+    "standard".into()
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl Default for Connection {
@@ -150,6 +171,10 @@ impl Default for Connection {
             extra_args: String::new(),
             created_at: 0,
             has_password: false,
+            crypt: false,
+            crypt_filename: default_crypt_filename(),
+            crypt_dir_names: true,
+            has_crypt_password: false,
         }
     }
 }
@@ -247,6 +272,19 @@ pub struct ConnectionInput {
     pub use_system_proxy: bool,
     pub probe_mode: String,
     pub extra_args: String,
+    /// 加密目录（rclone crypt）开关。默认关；前端勾了才会带 true
+    pub crypt: bool,
+    /// crypt 文件名加密方式：standard / obfuscate / off
+    pub crypt_filename: String,
+    /// crypt 是否加密目录名
+    pub crypt_dir_names: bool,
+    /// 加密密码（明文，只在内存里活到 obscure 为止）。编辑时留空 = 沿用已存的；
+    /// 想把已存密码清掉要显式带 `crypt_clear`
+    pub crypt_password: String,
+    /// 二次密码 / salt（可空，空表示用 rclone 默认）
+    pub crypt_salt: String,
+    /// 显式清除已保存的加密密码（关闭加密或换密码失败时的兜底）
+    pub crypt_clear: bool,
 }
 
 impl Default for ConnectionInput {
@@ -279,6 +317,12 @@ impl Default for ConnectionInput {
             use_system_proxy: false,
             probe_mode: "light".into(),
             extra_args: String::new(),
+            crypt: false,
+            crypt_filename: default_crypt_filename(),
+            crypt_dir_names: true,
+            crypt_password: String::new(),
+            crypt_salt: String::new(),
+            crypt_clear: false,
         }
     }
 }

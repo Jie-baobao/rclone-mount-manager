@@ -33,8 +33,32 @@ pub fn saved_password_ids(app: &AppHandle) -> std::collections::HashSet<String> 
     out
 }
 
-/// 取 conf 里某 section 的 pass / secret_access_key 值（兜底路径用）
-fn section_pass(text: &str, section: &str) -> Option<String> {
+/// 把「加密密码是否已保存」回填到连接列表上（表单的「已保存 / 必填」提示靠它）。
+/// 由 `store::load_connections` 统一调用，避免两边互相递归。
+pub fn fill_crypt_state(app: &AppHandle, list: &mut [Connection]) {
+    let conf_text = store::rclone_conf_path(app)
+        .and_then(|p| fs::read_to_string(p).map_err(|e| e.to_string()))
+        .unwrap_or_default();
+    for c in list.iter_mut() {
+        let cs = crypt_section_name(&c.id);
+        c.has_crypt_password = c.crypt
+            && (crate::credentials::get_password(app, &crypt_cred_key(&c.id)).is_some()
+                || section_value(&conf_text, &cs, &["password"]).is_some());
+    }
+}
+
+/// 凭据库里加密密码的 user 键：和连接主密码分开存，两者不能互相覆盖
+pub fn crypt_cred_key(id: &str) -> String {
+    format!("{id}#crypt")
+}
+
+/// 加密目录在 conf 里的 section 名（`rmm_x_crypt`），与底层 remote 并列存在
+pub fn crypt_section_name(id: &str) -> String {
+    format!("{}_crypt", remote_name(id))
+}
+
+/// 取 conf 里某 section 的某个键值（`pass` / `secret_access_key` / `password`…）
+fn section_value(text: &str, section: &str, keys: &[&str]) -> Option<String> {
     let mut cur = String::new();
     let mut out = None;
     for line in text.lines() {
@@ -46,8 +70,7 @@ fn section_pass(text: &str, section: &str) -> Option<String> {
         if cur == section {
             // 兼容 `pass = x` / `pass=x` 两种写法（用户可能手改过 conf）
             if let Some((k, v)) = t.split_once('=') {
-                let k = k.trim();
-                if (k == "pass" || k == "secret_access_key") && !v.trim().is_empty() {
+                if keys.contains(&k.trim()) && !v.trim().is_empty() {
                     out = Some(v.trim().to_string());
                 }
             }
@@ -56,9 +79,23 @@ fn section_pass(text: &str, section: &str) -> Option<String> {
     out
 }
 
-/// 重写某 section 的密码行：`Some(line)` = 删掉旧 pass/secret 行后注入这一行，
+/// 取 conf 里某 section 的 pass / secret_access_key 值（兜底路径用）
+fn section_pass(text: &str, section: &str) -> Option<String> {
+    section_value(text, section, &["pass", "secret_access_key"])
+}
+
+/// 重写某 section 的密码行：`Some(line)` = 删掉旧密码行后注入这一行，
 /// `None` = 把密码行从这一节里删掉。其它 section 原样保留。
 fn rewrite_section_pass(text: &str, section: &str, inject: Option<String>) -> String {
+    rewrite_section_keys(text, section, &["pass", "secret_access_key"], inject)
+}
+
+fn rewrite_section_keys(
+    text: &str,
+    section: &str,
+    keys: &[&str],
+    inject: Option<String>,
+) -> String {
     let mut out: Vec<String> = Vec::new();
     let mut cur = String::new();
     let mut injected = false;
@@ -79,8 +116,7 @@ fn rewrite_section_pass(text: &str, section: &str, inject: Option<String>) -> St
         if cur == section {
             // 本节里的旧密码行一律拿掉（要注入的稍后统一补）
             if let Some((k, _)) = t.split_once('=') {
-                let k = k.trim();
-                if k == "pass" || k == "secret_access_key" {
+                if keys.contains(&k.trim()) {
                     continue;
                 }
             }
@@ -108,6 +144,36 @@ pub fn session_conf_path(app: &AppHandle, id: &str) -> Result<PathBuf, String> {
     Ok(dir.join(format!("{}.conf", remote_name(id))))
 }
 
+/// 把某 section 里残留的密码搬进凭据库（成功才从 conf 删掉）。
+/// 迁移成功返回 true，调用方据此决定要不要回写持久 conf。
+fn migrate_pass_to_keyring(
+    app: &AppHandle,
+    text: &mut String,
+    section: &str,
+    cred: &str,
+    keys: &[&str],
+) -> bool {
+    let Some(p) = section_value(text.as_str(), section, keys) else {
+        return false;
+    };
+    match crate::credentials::get_password(app, cred) {
+        None => {
+            if crate::credentials::set_password(app, cred, &p).is_ok() {
+                *text = rewrite_section_keys(text.as_str(), section, keys, None);
+                true
+            } else {
+                false
+            }
+        }
+        // 两边都有且一致：以凭据库为准，conf 里这份清掉
+        Some(existing) if existing == p => {
+            *text = rewrite_section_keys(text.as_str(), section, keys, None);
+            true
+        }
+        _ => false,
+    }
+}
+
 /// 生成（或刷新）某连接的会话 conf，返回路径。
 ///
 /// 顺带做迁移：持久 conf 里还留着旧版密码而凭据库没有时，搬进凭据库、从 conf 删掉。
@@ -116,23 +182,30 @@ pub fn session_conf(app: &AppHandle, conn: &Connection) -> Result<PathBuf, Strin
     let conf_path = store::rclone_conf_path(app)?;
     let mut text = fs::read_to_string(&conf_path).unwrap_or_default();
     let section = remote_name(&conn.id);
+    let crypt_section = crypt_section_name(&conn.id);
+    let crypt_keys: [&str; 2] = ["password", "password2"];
+    let mut dirty = false;
 
     // 旧版迁移：conf 有密码、凭据库没有 → 搬进凭据库并从 conf 清掉
-    if let Some(p) = section_pass(&text, &section) {
-        if crate::credentials::get_password(app, &conn.id).is_none() {
-            if crate::credentials::set_password(app, &conn.id, &p).is_ok() {
-                text = rewrite_section_pass(&text, &section, None);
-                store::write_atomic(&conf_path, &text)?;
-            }
-        }
+    dirty |= migrate_pass_to_keyring(app, &mut text, &section, &conn.id, &["pass", "secret_access_key"]);
+    if conn.crypt {
+        dirty |= migrate_pass_to_keyring(
+            app,
+            &mut text,
+            &crypt_section,
+            &crypt_cred_key(&conn.id),
+            &crypt_keys,
+        );
+    }
+    if dirty {
+        store::write_atomic(&conf_path, &text)?;
     }
 
     let obscured = crate::credentials::get_password(app, &conn.id)
         // 凭据库失败时的兜底：conf 里可能还有（write_remote 写进去的）
         .or_else(|| section_pass(&text, &section));
 
-    let out_path = session_conf_path(app, &conn.id)?;
-    let content = match obscured {
+    let mut content = match obscured {
         Some(p) => {
             let key = if conn.protocol.is_s3() {
                 "secret_access_key"
@@ -143,6 +216,22 @@ pub fn session_conf(app: &AppHandle, conn: &Connection) -> Result<PathBuf, Strin
         }
         None => text,
     };
+
+    // 加密目录的密码同样注入（两行一起补：password 必填，password2 有才补）
+    if conn.crypt {
+        let cp = crate::credentials::get_password(app, &crypt_cred_key(&conn.id))
+            .or_else(|| section_value(&content, &crypt_section, &crypt_keys));
+        if let Some(p) = cp {
+            let mut inject = format!("password = {p}");
+            if let Some(salt) = section_value(&content, &crypt_section, &["password2"]) {
+                inject.push('\n');
+                inject.push_str(&format!("password2 = {salt}"));
+            }
+            content = rewrite_section_keys(&content, &crypt_section, &crypt_keys, Some(inject));
+        }
+    }
+
+    let out_path = session_conf_path(app, &conn.id)?;
     // 探测每 15 秒就会调一次，内容没变就不重写（省掉无谓的写盘与 .bak 翻滚）
     let same = fs::read_to_string(&out_path)
         .map(|old| old == content)
@@ -160,14 +249,14 @@ pub fn delete_session_conf(app: &AppHandle, id: &str) {
     }
 }
 
-/// 拼出 `rclone mount` / `rclone lsd` 用的远程路径（`remote:sub/path`）。
+/// 底层 remote 的远程路径（`remote:子路径`），不含加密层。
 ///
 /// - SMB：`rmm_x:共享名/子目录`（rclone 的 smb 后端**没有** `path` 配置项，
 ///   共享名与子目录只能写在远程路径里）
 /// - FTP / SFTP：`rmm_x:子目录`
 /// - S3：`rmm_x:bucket/前缀`
 /// - WebDAV：`rmm_x:`（子路径已经在 conf 的 `url` 里拼好了，这里再拼会重复）
-pub fn remote_spec(conn: &Connection) -> String {
+pub fn base_spec(conn: &Connection) -> String {
     let base = remote_name(&conn.id);
     if conn.protocol.is_webdav() {
         return format!("{base}:");
@@ -179,6 +268,18 @@ pub fn remote_spec(conn: &Connection) -> String {
         format!("{base}:")
     } else {
         format!("{base}:{sub}")
+    }
+}
+
+/// 实际交给 `rclone mount` / `lsd` / `about` 的远程路径。
+///
+/// 开了加密目录时，这一层是 crypt 段的 `rmm_x_crypt:`——加解密由 rclone 在本地做，
+/// 底层仍是 `base_spec()` 指向的位置，所以不要在这里再拼子路径（会变成 crypt 内部的相对路径）。
+pub fn remote_spec(conn: &Connection) -> String {
+    if conn.crypt {
+        format!("{}:", crypt_section_name(&conn.id))
+    } else {
+        base_spec(conn)
     }
 }
 
@@ -410,14 +511,36 @@ pub fn normalize_webdav_url(host: &str, port: u16, path: &str) -> String {
     out
 }
 
-/// 把一条连接写进 rclone.conf 中名为 `rmm_<id>` 的 section。
-/// 只动自己那一节，用户其它 remote 原样保留。
+/// 加密目录（crypt 段）的密码输入。
+///
+/// `password` / `salt` 是**明文**（`None` 或空串表示"沿用已存的，别动"）；
+/// 想把已存密码彻底清掉要显式 `clear`。已存在的数据是靠这对密码解开的，
+/// 所以"清空输入框"绝不能理解成"删掉密码"。
+#[derive(Default)]
+pub struct CryptInput<'a> {
+    pub password: Option<&'a str>,
+    pub salt: Option<&'a str>,
+    /// 已 obscure 的密码（导入配置时用，优先于 `password`，不必再走一次 rclone）
+    pub obscured: Option<&'a str>,
+    pub clear: bool,
+}
+
+impl<'a> CryptInput<'a> {
+    /// 不动密码（只重建 crypt 段的结构，密码沿用 conf / 凭据库里的）
+    pub fn keep() -> Self {
+        Self::default()
+    }
+}
+
+/// 把一条连接写进 rclone.conf 中名为 `rmm_<id>` 的 section（开了加密则连带 `rmm_<id>_crypt`）。
+/// 只动自己那两节，用户其它 remote 原样保留。
 pub fn upsert_remote(
     app: &AppHandle,
     conn: &Connection,
     plain_password: Option<&str>,
+    crypt: CryptInput<'_>,
 ) -> Result<(), String> {
-    write_remote(app, conn, PasswordSource::Plain(plain_password))
+    write_remote(app, conn, PasswordSource::Plain(plain_password), crypt)
 }
 
 /// 导入连接配置时用：密码已经是 rclone obscure 过的字符串，直接落盘即可。
@@ -425,8 +548,9 @@ pub fn upsert_remote_obscured(
     app: &AppHandle,
     conn: &Connection,
     obscured: Option<&str>,
+    crypt: CryptInput<'_>,
 ) -> Result<(), String> {
-    write_remote(app, conn, PasswordSource::Obscured(obscured))
+    write_remote(app, conn, PasswordSource::Obscured(obscured), crypt)
 }
 
 /// 密码来源：明文（需先 obscure）或已混淆（导入时直接写）。
@@ -439,10 +563,15 @@ fn write_remote(
     app: &AppHandle,
     conn: &Connection,
     source: PasswordSource<'_>,
+    crypt: CryptInput<'_>,
 ) -> Result<(), String> {
     let conf_path = store::rclone_conf_path(app)?;
     let existing = fs::read_to_string(&conf_path).unwrap_or_default();
     let section = remote_name(&conn.id);
+    let crypt_section = crypt_section_name(&conn.id);
+    // crypt 段完全由本应用托管：每次重建，所以先把要继承的旧密码捞出来
+    let old_crypt_pass = section_value(&existing, &crypt_section, &["password"]);
+    let old_crypt_salt = section_value(&existing, &crypt_section, &["password2"]);
 
     let mut kept: Vec<String> = Vec::new();
     let mut skipping = false;
@@ -451,7 +580,8 @@ fn write_remote(
         let trimmed = line.trim();
         if trimmed.starts_with('[') && trimmed.ends_with(']') {
             let name = &trimmed[1..trimmed.len() - 1];
-            skipping = name == section;
+            // crypt 段一律丢弃重建（关掉加密时也顺手清理干净）
+            skipping = name == section || name == crypt_section;
             if skipping {
                 continue;
             }
@@ -567,6 +697,66 @@ fn write_remote(
         }
     }
 
+    // ---- 加密目录（rclone crypt）----
+    //
+    // crypt 段是一个"包装层"：`remote = rmm_x:共享名/子目录` 指向真正的后端，
+    // 密码单独一把（存凭据库，key 加 `#crypt` 后缀），加解密由 rclone 在本地做。
+    if conn.crypt {
+        let cred = crypt_cred_key(&conn.id);
+        let mut pass_for_conf: Option<String> = None;
+        if crypt.clear {
+            crate::credentials::delete_password(app, &cred);
+        } else if let Some(o) = crypt.obscured.filter(|s| !s.is_empty()) {
+            if crate::credentials::set_password(app, &cred, o).is_err() {
+                pass_for_conf = Some(o.to_string());
+            }
+        } else if let Some(p) = crypt.password.map(str::trim).filter(|p| !p.is_empty()) {
+            let o = obscure(app, p)?;
+            if crate::credentials::set_password(app, &cred, &o).is_err() {
+                pass_for_conf = Some(o);
+            }
+        } else if crate::credentials::get_password(app, &cred).is_none() {
+            // 没输新密码、凭据库里也没有：沿用 conf 里的旧值（升级 / 换机首启）
+            pass_for_conf = old_crypt_pass.clone();
+        }
+
+        // password2（salt）填了才换，没填沿用旧的：填错或误清空会让已有数据永久解不开
+        let salt_for_conf = match crypt.salt.map(str::trim).filter(|s| !s.is_empty()) {
+            Some(s) => Some(obscure(app, s)?),
+            None => old_crypt_salt.clone(),
+        };
+
+        body.push(String::new());
+        body.push(format!("[{crypt_section}]"));
+        body.push("type = crypt".into());
+        body.push(format!("remote = {}", base_spec(conn)));
+        if let Some(p) = &pass_for_conf {
+            body.push(format!("password = {p}"));
+        }
+        if let Some(s) = &salt_for_conf {
+            body.push(format!("password2 = {s}"));
+        }
+        body.push(format!(
+            "filename_encryption = {}",
+            match conn.crypt_filename.as_str() {
+                "obfuscate" => "obfuscate",
+                "off" => "off",
+                _ => "standard",
+            }
+        ));
+        body.push(format!(
+            "directory_name_encryption = {}",
+            // rclone 的硬性约束：文件名不加密时目录名也不能加密，否则启动直接报错
+            if conn.crypt_dir_names && conn.crypt_filename != "off" {
+                "true"
+            } else {
+                "false"
+            }
+        ));
+    } else if crypt.clear {
+        crate::credentials::delete_password(app, &crypt_cred_key(&conn.id));
+    }
+
     let mut text = kept.join("\n");
     if !text.is_empty() {
         text.push_str("\n\n");
@@ -581,18 +771,22 @@ fn write_remote(
 /// 从 rclone.conf 和系统凭据库里删掉某连接的所有痕迹（删除连接时调用）
 pub fn remove_remote(app: &AppHandle, id: &str) -> Result<(), String> {
     crate::credentials::delete_password(app, id);
+    // 加密目录的密码也一起清掉：连接都删了，留着这把钥匙没有意义
+    crate::credentials::delete_password(app, &crypt_cred_key(id));
     delete_session_conf(app, id);
     let conf_path = store::rclone_conf_path(app)?;
     let Ok(existing) = fs::read_to_string(&conf_path) else {
         return Ok(());
     };
     let section = remote_name(id);
+    let crypt_section = crypt_section_name(id);
     let mut kept = Vec::new();
     let mut skipping = false;
     for line in existing.lines() {
         let trimmed = line.trim();
         if trimmed.starts_with('[') && trimmed.ends_with(']') {
-            skipping = &trimmed[1..trimmed.len() - 1] == section;
+            let name = &trimmed[1..trimmed.len() - 1];
+            skipping = name == section || name == crypt_section;
             if skipping {
                 continue;
             }
@@ -1075,6 +1269,18 @@ pub fn raw_password(app: &AppHandle, id: &str) -> Option<String> {
         }
     }
     obscured
+}
+
+/// 导出配置用：取加密目录的密码（同样是 obscure 后的串，凭据库优先）。
+/// 没有就返回 `None`——调用方据此决定要不要往导出文本里补 crypt 段。
+pub fn raw_crypt_password(app: &AppHandle, id: &str) -> Option<String> {
+    let cred = crypt_cred_key(id);
+    if let Some(p) = crate::credentials::get_password(app, &cred) {
+        return Some(p);
+    }
+    let conf_path = store::rclone_conf_path(app).ok()?;
+    let text = fs::read_to_string(conf_path).ok()?;
+    section_value(&text, &crypt_section_name(id), &["password"])
 }
 
 /// 读取 rclone 版本号（取 `rclone version` 第一行里的 vX.Y.Z）

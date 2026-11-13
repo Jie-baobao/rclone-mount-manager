@@ -7,6 +7,7 @@ import {
   S3_PRESETS,
   type Connection,
   type ConnectionInput,
+  type CryptFilename,
   type DiagResult,
   type EnvInfo,
   type Protocol,
@@ -86,6 +87,17 @@ export default function ConnectionForm({ initial, env, t, onClose, onSaved }: Pr
   const [s3Provider, setS3Provider] = useState(initial?.s3_provider ?? "Other");
   const [region, setRegion] = useState(initial?.region ?? "");
   const [pathStyle, setPathStyle] = useState(initial?.s3_path_style ?? false);
+  /** 加密目录（rclone crypt）：默认关。挂载点里看到明文，底层存密文 */
+  const [crypt, setCrypt] = useState(initial?.crypt ?? false);
+  const [cryptPw, setCryptPw] = useState("");
+  /** 二次密码 / salt：留空沿用已存的（改了会让已有数据解不开，所以不提供「清空」） */
+  const [cryptSalt, setCryptSalt] = useState("");
+  const [cryptFilename, setCryptFilename] = useState<CryptFilename>(
+    initial?.crypt_filename === "obfuscate" || initial?.crypt_filename === "off"
+      ? initial.crypt_filename
+      : "standard"
+  );
+  const [cryptDirNames, setCryptDirNames] = useState(initial?.crypt_dir_names ?? true);
   const [presetKey, setPresetKey] = useState(
     S3_PRESETS.find((p) => p.provider === (initial?.s3_provider ?? "Other"))?.key ?? "other"
   );
@@ -106,6 +118,9 @@ export default function ConnectionForm({ initial, env, t, onClose, onSaved }: Pr
   const needsPass = protocol !== "s3";
   /** 没存过密码又没填：不许保存，别再造出一条「看起来有密码」的连接 */
   const passMissing = needsPass && !anon && !savedPass && password === "";
+  /** 加密密码：编辑时留空表示沿用已存的；新建 / 从没存过就必须填 */
+  const savedCryptPw = editing ? !!initial?.has_crypt_password : false;
+  const cryptPwMissing = crypt && !savedCryptPw && cryptPw.trim() === "";
 
   const portNum = Number(portText);
   const port = portNum >= 1 && portNum <= 65535 ? portNum : meta.port;
@@ -168,6 +183,12 @@ export default function ConnectionForm({ initial, env, t, onClose, onSaved }: Pr
       use_system_proxy: sysProxy,
       probe_mode: probeMode,
       extra_args: extraArgs,
+      crypt,
+      crypt_filename: cryptFilename,
+      crypt_dir_names: cryptDirNames,
+      crypt_password: cryptPw,
+      crypt_salt: cryptSalt,
+      crypt_clear: false,
     }),
     [
       initial?.id,
@@ -197,6 +218,11 @@ export default function ConnectionForm({ initial, env, t, onClose, onSaved }: Pr
       sysProxy,
       probeMode,
       extraArgs,
+      crypt,
+      cryptFilename,
+      cryptDirNames,
+      cryptPw,
+      cryptSalt,
     ]
   );
 
@@ -305,7 +331,7 @@ export default function ConnectionForm({ initial, env, t, onClose, onSaved }: Pr
           <button
             className="btn primary"
             onClick={doSave}
-            disabled={saving || !name || !host || !!targetWarn || portBad || passMissing}
+            disabled={saving || !name || !host || !!targetWarn || portBad || passMissing || cryptPwMissing}
           >
             {saving ? t("cf.saving") : t("cf.save")}
           </button>
@@ -496,6 +522,72 @@ export default function ConnectionForm({ initial, env, t, onClose, onSaved }: Pr
           <input type="checkbox" checked={reconnect} onChange={(e) => setReconnect(e.target.checked)} />
           {t("cf.reconnect")}
         </label>
+      </div>
+
+      {/* 加密目录（rclone crypt）：小众功能，默认关；勾了才展开密码设置 */}
+      <div className={"crypt-box" + (crypt ? " on" : "")}>
+        <label className="check">
+          <input type="checkbox" checked={crypt} onChange={(e) => setCrypt(e.target.checked)} />
+          {t("cf.crypt")}
+          <span className="crypt-tag">{t("cf.cryptTag")}</span>
+        </label>
+        {!crypt ? (
+          <p className="tips">{t("cf.cryptHint")}</p>
+        ) : (
+          <div className="crypt-body">
+            <p className="tips crypt-warn">⚠ {t("cf.cryptWarn")}</p>
+            {savedCryptPw && <p className="tips bad-text">⚠ {t("cf.cryptChangeWarn")}</p>}
+            <div className="form-grid">
+              <label className="field">
+                <span>
+                  {t("cf.cryptPass")}
+                  {savedCryptPw && <span className="pass-badge">{t("cf.passSaved")}</span>}
+                </span>
+                <input
+                  className="ctl"
+                  type="password"
+                  value={cryptPw}
+                  onChange={(e) => setCryptPw(e.target.value)}
+                  placeholder={savedCryptPw ? t("cf.passKeep") : t("cf.cryptPassRequired")}
+                  autoComplete="new-password"
+                />
+              </label>
+              <label className="field">
+                <span>{t("cf.cryptSalt")}</span>
+                <input
+                  className="ctl"
+                  type="password"
+                  value={cryptSalt}
+                  onChange={(e) => setCryptSalt(e.target.value)}
+                  placeholder={t("cf.cryptSaltPh")}
+                  autoComplete="new-password"
+                />
+              </label>
+              <label className="field">
+                <span>{t("cf.cryptFilename")}</span>
+                <select
+                  className="ctl"
+                  value={cryptFilename}
+                  onChange={(e) => setCryptFilename(e.target.value as CryptFilename)}
+                >
+                  <option value="standard">{t("cf.cryptFnStandard")}</option>
+                  <option value="obfuscate">{t("cf.cryptFnObfuscate")}</option>
+                  <option value="off">{t("cf.cryptFnOff")}</option>
+                </select>
+              </label>
+            </div>
+            <label className={"check" + (cryptFilename === "off" ? " disabled" : "")}>
+              <input
+                type="checkbox"
+                checked={cryptDirNames && cryptFilename !== "off"}
+                disabled={cryptFilename === "off"}
+                onChange={(e) => setCryptDirNames(e.target.checked)}
+              />
+              {t("cf.cryptDir")}
+            </label>
+            <p className="tips">{t("cf.cryptPerf")}</p>
+          </div>
+        )}
       </div>
 
       <details className="adv">

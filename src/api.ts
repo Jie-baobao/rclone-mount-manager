@@ -48,7 +48,18 @@ export interface Connection {
   created_at: number;
   /** conf 里是否已保存密码（编辑表单的提示与保存校验靠它） */
   has_password: boolean;
+  /** 加密目录（rclone crypt）：挂载点看到明文，底层存密文 */
+  crypt: boolean;
+  /** 文件名加密方式 */
+  crypt_filename: CryptFilename;
+  /** 是否连目录名一起加密 */
+  crypt_dir_names: boolean;
+  /** 加密密码是否已保存（提示与校验用） */
+  has_crypt_password: boolean;
 }
+
+/** rclone crypt 的文件名加密方式：standard 最安全，obfuscate 只打乱、off 保留原名 */
+export type CryptFilename = "standard" | "obfuscate" | "off";
 
 export type ProbeMode = "full" | "light" | "process";
 
@@ -80,6 +91,16 @@ export interface ConnectionInput {
   use_system_proxy: boolean;
   probe_mode: ProbeMode;
   extra_args: string;
+  /** 加密目录开关（默认 false；勾了才带下面几项） */
+  crypt: boolean;
+  crypt_filename: CryptFilename;
+  crypt_dir_names: boolean;
+  /** 明文；编辑时留空 = 沿用已保存的 */
+  crypt_password: string;
+  /** 二次密码 / salt；留空 = 沿用已保存的 */
+  crypt_salt: string;
+  /** 显式清除已保存的加密密码（正常保存传 false） */
+  crypt_clear: boolean;
 }
 
 export interface MountState {

@@ -45,6 +45,10 @@ const conns: Connection[] = [
     extra_args: "",
     created_at: now,
     has_password: true,
+    crypt: false,
+    crypt_filename: "standard",
+    crypt_dir_names: true,
+    has_crypt_password: false,
   },
   {
     id: "a2",
@@ -76,6 +80,10 @@ const conns: Connection[] = [
     created_at: now - 100,
     // 故意留一条没存过密码的：表单里能看到「必填」提示的样子
     has_password: false,
+    crypt: false,
+    crypt_filename: "standard",
+    crypt_dir_names: true,
+    has_crypt_password: false,
   },
   {
     id: "a3",
@@ -106,6 +114,11 @@ const conns: Connection[] = [
     extra_args: "",
     created_at: now - 200,
     has_password: true,
+    // 这一条开了加密目录：用来验证「已保存」徽标与表单展开态
+    crypt: true,
+    crypt_filename: "standard",
+    crypt_dir_names: true,
+    has_crypt_password: true,
   },
 ];
 
@@ -484,6 +497,10 @@ function reply(cmd: string, args?: Record<string, unknown>): unknown {
         ...input,
         id: input.id ?? String(Date.now()),
         password: undefined,
+        // 真实后端从凭据库算这个值，mock 里按输入模拟
+        has_crypt_password: input.crypt
+          ? !!(existing?.has_crypt_password || input.crypt_password)
+          : false,
       } as unknown as Connection;
       const idx = list.findIndex((c) => c.id === saved.id);
       if (idx >= 0) list[idx] = saved;

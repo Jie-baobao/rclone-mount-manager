@@ -53,6 +53,8 @@ pub fn load_connections(app: &AppHandle) -> Vec<Connection> {
     for c in &mut list {
         c.has_password = saved.contains(&c.id);
     }
+    // 加密目录那把密码同理（只有勾了加密的连接才需要）
+    crate::rclone::fill_crypt_state(app, &mut list);
     list
 }
 

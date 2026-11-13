@@ -41,8 +41,27 @@ interface Toast {
  * 后端把「位置被占」编码成 `Err("rmm-conflict:[...]")`，
  * 这里还原成结构化列表交给弹窗；普通错误仍按原文提示。
  */
-const CONFLICT_TAG = "rmm-conflict:";
-function parseConflict(e: unknown): Conflict[] | null {
+/** 加密目录的小锁：列表项和详情页标题共用，提醒这条连接看到的是明文、底层是密文 */
+function CryptIcon() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      width="12"
+      height="12"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <rect x="4" y="10" width="16" height="10" rx="2" />
+      <path d="M8 10V7a4 4 0 0 1 8 0v3" />
+    </svg>
+  );
+}
+
+const CONFLICT_TAG = "rmm-conflict:";function parseConflict(e: unknown): Conflict[] | null {
   const s = e instanceof Error ? e.message : String(e);
   if (!s.startsWith(CONFLICT_TAG)) return null;
   try {
@@ -603,6 +622,11 @@ export default function App() {
                     <span className="conn-name">
                       {c.pinned && <span className="pin">★</span>}
                       {c.name}
+                      {c.crypt && (
+                        <span className="crypt-mark" title={t("cf.crypt")}>
+                          <CryptIcon />
+                        </span>
+                      )}
                     </span>
                     <span className="conn-sub">
                       <span className="tag">{PROTOCOL_META[c.protocol].short}</span>
@@ -685,6 +709,11 @@ export default function App() {
               <div className="title">
                 <h2>
                   {current.name}
+                  {current.crypt && (
+                    <span className="crypt-mark" title={t("cf.crypt")}>
+                      <CryptIcon />
+                    </span>
+                  )}
                   {current.pinned && <span className="pin">★</span>}
                 </h2>
                 <p className="muted mono">
