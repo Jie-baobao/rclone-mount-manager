@@ -37,7 +37,7 @@ pub fn load_connections(app: &AppHandle) -> Vec<Connection> {
     let Ok(path) = connections_path(app) else {
         return Vec::new();
     };
-    let mut list = match fs::read_to_string(&path) {
+    let mut list: Vec<Connection> = match fs::read_to_string(&path) {
         Ok(text) => serde_json::from_str(&text).unwrap_or_default(),
         Err(_) => Vec::new(),
     };
