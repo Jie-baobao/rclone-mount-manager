@@ -59,7 +59,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          RCLONE_VER=1.75.2
+          RCLONE_VER=1.76.0
           WINFSP_URL="https://github.com/winfsp/winfsp/releases/download/v2.1/winfsp-2.1.25156.msi"
 
           case "${RUNNER_OS}" in

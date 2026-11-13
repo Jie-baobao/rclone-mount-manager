@@ -182,7 +182,7 @@ function reply(cmd: string, args?: Record<string, unknown>): unknown {
         platform: "windows x86_64",
         app_version: "0.3.10",
         rclone_path: "C:\\Program Files\\Rclone Mount Manager\\resources\\rclone\\rclone.exe",
-        rclone_version: "1.75.2",
+        rclone_version: "1.76.0",
         rclone_source: "bundled",
         rclone_bundled: true,
         // 浏览器预览按 Windows 的样子显示；真机上是后端按平台探测的
@@ -385,8 +385,8 @@ function reply(cmd: string, args?: Record<string, unknown>): unknown {
           {
             kind: "rclone",
             name: "rclone",
-            current: "1.75.2",
-            latest: "1.75.2",
+            current: "1.76.0",
+            latest: "1.76.0",
             has_update: false,
             url: "https://rclone.org/downloads/",
             note: "",
@@ -403,7 +403,7 @@ function reply(cmd: string, args?: Record<string, unknown>): unknown {
         ],
       };
     case "install_rclone":
-      return "1.75.2";
+      return "1.76.0";
     case "install_winfsp":
       return "WinFsp 安装完成";
     case "set_autostart":

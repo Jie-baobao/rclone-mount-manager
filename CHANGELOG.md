@@ -2,6 +2,19 @@
 
 每个版本改了什么，按时间倒序列出。安装包在 [Releases](https://github.com/Jie-baobao/rclone-mount-manager/releases) 页面下载。
 
+## v0.3.15 — 未发布
+
+### 更新
+
+- **内置 rclone 升到 1.76.0**（原 1.75.2）。这一版 rclone 主要修安全问题（`local` / `rc` / `serve`
+  一串 CVE，以及「HTTPS 被重定向到 HTTP」默认拒绝），顺带两条正好治我们的毛病：
+  - `mount: Fix VFS instance leaks on mount failures and unmounts`——挂载失败或卸载后残留的 VFS 实例不再泄漏，
+    反复挂载 / 卸载更干净
+  - `VFS: Fix uploads never starting while a dirty file keeps being read`——边写边读的大文件不会卡住不上传
+  - `smb: Add workstation field`（新增可选参数，我们暂未在表单里暴露）
+- 已确认我们用的参数不受弃用影响（`--rc-web-gui`、`serve s3 --no-cleanup` 与我们无关；
+  `--rc-no-auth` 依旧可用，只是新增了请求体大小限制，我们的统计查询远小于阈值）
+
 ## v0.3.14 — 2026-11-13
 
 ### 新增
