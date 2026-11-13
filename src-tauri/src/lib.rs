@@ -1691,8 +1691,10 @@ fn export_diagnostics_blocking(app: &AppHandle) -> Result<String, String> {
         zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
 
     let mut add = |name: &str, content: &str| -> Result<(), String> {
+        // 两个 Result 的 Err 类型不同（ZipError / io::Error），不能直接 and_then
         zip.start_file(name, options)
-            .and_then(|_| zip.write_all(content.as_bytes()))
+            .map_err(|e| format!("写入诊断包失败：{e}"))?;
+        zip.write_all(content.as_bytes())
             .map_err(|e| format!("写入诊断包失败：{e}"))
     };
 

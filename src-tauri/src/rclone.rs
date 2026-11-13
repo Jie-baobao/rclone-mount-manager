@@ -549,7 +549,7 @@ fn write_remote(
             if crate::credentials::set_password(app, &conn.id, o).is_ok() {
                 fallback_pass = None;
             } else {
-                fallback_pass = Some(o.clone());
+                fallback_pass = Some(o.to_string());
             }
         }
         _ => {
