@@ -43,6 +43,7 @@ const conns: Connection[] = [
     probe_mode: "light",
     extra_args: "",
     created_at: now,
+    has_password: true,
   },
   {
     id: "a2",
@@ -71,6 +72,8 @@ const conns: Connection[] = [
     probe_mode: "light",
     extra_args: "",
     created_at: now - 100,
+    // 故意留一条没存过密码的：表单里能看到「必填」提示的样子
+    has_password: false,
   },
   {
     id: "a3",
@@ -99,6 +102,7 @@ const conns: Connection[] = [
     probe_mode: "light",
     extra_args: "",
     created_at: now - 200,
+    has_password: true,
   },
 ];
 

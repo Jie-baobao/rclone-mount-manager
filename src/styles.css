@@ -841,6 +841,24 @@ input[type="number"].ctl {
   display: block;
 }
 
+/* 「已保存」小标记：占位符说真话之外的第二重确认 */
+.pass-badge {
+  margin-left: 8px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: rgba(23, 128, 61, 0.12);
+  color: var(--ok);
+  font-size: 11px;
+  font-weight: 400;
+  vertical-align: 1px;
+}
+
+@media (prefers-color-scheme: dark) {
+  .pass-badge {
+    background: rgba(74, 222, 128, 0.14);
+  }
+}
+
 /* 密码框右侧给「显示/隐藏」留出位置，宽度和其它输入框保持一致 */
 .pass-wrap .ctl {
   padding-right: 52px;

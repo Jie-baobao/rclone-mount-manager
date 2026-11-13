@@ -37,10 +37,17 @@ pub fn load_connections(app: &AppHandle) -> Vec<Connection> {
     let Ok(path) = connections_path(app) else {
         return Vec::new();
     };
-    match fs::read_to_string(&path) {
+    let mut list = match fs::read_to_string(&path) {
         Ok(text) => serde_json::from_str(&text).unwrap_or_default(),
         Err(_) => Vec::new(),
+    };
+    // conf 里到底存没存过密码：表单的「已保存 / 必填」提示靠它。
+    // 每次读列表都现查一遍（conf 就几 KB），别在保存时落盘——那会变陈旧。
+    let saved = crate::rclone::saved_password_ids(app);
+    for c in &mut list {
+        c.has_password = saved.contains(&c.id);
     }
+    list
 }
 
 /// 原子写入：先写临时文件，再替换目标，并保留一份 .bak。

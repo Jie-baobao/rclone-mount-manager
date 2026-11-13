@@ -11,6 +11,39 @@ pub fn remote_name(id: &str) -> String {
     format!("rmm_{id}")
 }
 
+/// conf 里已保存密码的 remote id 集合。
+///
+/// 密码不在 connections.json 里，只在 rclone.conf 的 `pass =`（S3 是 `secret_access_key =`）里。
+/// 表单的「已保存密码 / 必填」提示以这里为准——不能凭占位符猜，否则用户会以为输过密码，
+/// 实际 rclone 发的是空密码（`attempted logon is invalid` 就是这么来的）。
+pub fn saved_password_ids(app: &AppHandle) -> std::collections::HashSet<String> {
+    let Ok(path) = crate::store::rclone_conf_path(app) else {
+        return Default::default();
+    };
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return Default::default();
+    };
+    let mut out = std::collections::HashSet::new();
+    let mut cur: Option<String> = None;
+    for line in text.lines() {
+        let t = line.trim();
+        if t.starts_with('[') && t.ends_with(']') {
+            let name = &t[1..t.len() - 1];
+            cur = name.strip_prefix("rmm_").map(|s| s.to_string());
+            continue;
+        }
+        if let Some(id) = &cur {
+            if let Some((key, val)) = t.split_once('=') {
+                let key = key.trim();
+                if (key == "pass" || key == "secret_access_key") && !val.trim().is_empty() {
+                    out.insert(id.clone());
+                }
+            }
+        }
+    }
+    out
+}
+
 /// 拼出 `rclone mount` / `rclone lsd` 用的远程路径（`remote:sub/path`）。
 ///
 /// - SMB：`rmm_x:共享名/子目录`（rclone 的 smb 后端**没有** `path` 配置项，

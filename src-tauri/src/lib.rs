@@ -349,6 +349,7 @@ fn to_connection(input: &ConnectionInput, existing: Option<&Connection>) -> Conn
         },
         extra_args: input.extra_args.trim().to_string(),
         created_at: existing.map(|c| c.created_at).unwrap_or_else(now_secs),
+        has_password: existing.map(|c| c.has_password).unwrap_or(false),
     }
 }
 

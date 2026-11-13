@@ -44,6 +44,8 @@ export interface Connection {
   /** 追加给 rclone mount 的自定义参数（命令行原文，例如 `--transfers 4`） */
   extra_args: string;
   created_at: number;
+  /** conf 里是否已保存密码（编辑表单的提示与保存校验靠它） */
+  has_password: boolean;
 }
 
 export type ProbeMode = "full" | "light" | "process";

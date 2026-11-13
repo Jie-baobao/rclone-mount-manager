@@ -61,6 +61,8 @@ export default function ConnectionForm({ initial, env, t, onClose, onSaved }: Pr
   const [user, setUser] = useState(initial?.user ?? "");
   const [password, setPassword] = useState("");
   const [showPass, setShowPass] = useState(false);
+  /** SMB / FTP 的匿名访问：勾了就不要求账号密码（rclone 不带凭据，服务端按 guest 放行） */
+  const [anon, setAnon] = useState(false);
   const [target, setTarget] = useState(initial?.target ?? (win ? "Z:" : ""));
   const [cacheDir, setCacheDir] = useState(initial?.cache_dir ?? "");
 
@@ -93,6 +95,15 @@ export default function ConnectionForm({ initial, env, t, onClose, onSaved }: Pr
 
   const meta = PROTOCOL_META[protocol];
   const isS3 = protocol === "s3";
+
+  /** conf 里真存过密码吗（后端从 rclone.conf 查的，编辑时随列表下发；新建一律没有）。
+   *  以前占位符一律写「留空沿用已保存密码」，没存过的连接也这么说，用户以为输过密码，
+   *  实际 rclone 发空密码挂载报 logon invalid —— 提示必须说真话。 */
+  const savedPass = editing ? !!initial?.has_password : false;
+  /** 这些协议没密码挂不上（S3 有公开桶，secret 允许为空） */
+  const needsPass = protocol !== "s3";
+  /** 没存过密码又没填：不许保存，别再造出一条「看起来有密码」的连接 */
+  const passMissing = needsPass && !anon && !savedPass && password === "";
 
   const portNum = Number(portText);
   const port = portNum >= 1 && portNum <= 65535 ? portNum : meta.port;
@@ -290,7 +301,7 @@ export default function ConnectionForm({ initial, env, t, onClose, onSaved }: Pr
           <button
             className="btn primary"
             onClick={doSave}
-            disabled={saving || !name || !host || !!targetWarn || portBad}
+            disabled={saving || !name || !host || !!targetWarn || portBad || passMissing}
           >
             {saving ? t("cf.saving") : t("cf.save")}
           </button>
@@ -391,14 +402,17 @@ export default function ConnectionForm({ initial, env, t, onClose, onSaved }: Pr
         </label>
 
         <label className="field">
-          <span>{isS3 ? t("cf.secret") : t("cf.pass")}</span>
+          <span>
+            {isS3 ? t("cf.secret") : t("cf.pass")}
+            {savedPass && <span className="pass-badge">{t("cf.passSaved")}</span>}
+          </span>
           <div className="pass-wrap">
             <input
               className="ctl"
               type={showPass ? "text" : "password"}
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              placeholder={editing ? t("cf.passKeep") : ""}
+              placeholder={savedPass ? t("cf.passKeep") : t("cf.passRequired")}
               autoComplete="new-password"
             />
             <button type="button" className="pass-toggle" onClick={() => setShowPass((v) => !v)}>
@@ -439,6 +453,12 @@ export default function ConnectionForm({ initial, env, t, onClose, onSaved }: Pr
       {protocol === "webdav" && <p className="tips">{t("cf.davTip")}</p>}
 
       <div className="checks">
+        {(protocol === "smb" || protocol === "ftp") && (
+          <label className="check">
+            <input type="checkbox" checked={anon} onChange={(e) => setAnon(e.target.checked)} />
+            {t("cf.anon")}
+          </label>
+        )}
         {protocol === "webdav" && (
           <label className="check">
             <input type="checkbox" checked={ignoreCert} onChange={(e) => setIgnoreCert(e.target.checked)} />

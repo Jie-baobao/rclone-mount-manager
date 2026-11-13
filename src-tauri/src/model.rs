@@ -110,6 +110,11 @@ pub struct Connection {
     /// 只做「按空格/引号切分后追加」，不校验语义；与本应用自己控制的参数冲突时会被拒绝。
     pub extra_args: String,
     pub created_at: i64,
+    /// conf 里是否已保存过密码（load_connections 时从 rclone.conf 读出，随列表下发；
+    /// 表单的「已保存 / 必填」提示靠它——密码不在 connections.json，只有 conf 里有）。
+    /// 反序列化缺省 false，老配置文件无需迁移。
+    #[serde(default)]
+    pub has_password: bool,
 }
 
 impl Default for Connection {
@@ -141,6 +146,7 @@ impl Default for Connection {
             probe_mode: "light".into(),
             extra_args: String::new(),
             created_at: 0,
+            has_password: false,
         }
     }
 }
