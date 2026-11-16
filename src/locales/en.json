@@ -132,6 +132,7 @@
   "cf.saving": "Saving…",
   "cf.secret": "Secret Access Key",
   "cf.show": "Show",
+  "cf.smbPathHint": "code and Code are the same location — SMB is case-insensitive (server behaviour). Use WebDAV / SFTP if case matters.",
   "cf.sysProxy": "Use system proxy",
   "cf.sysProxyTip": "Mounting and probing use the proxy configured in your system settings",
   "cf.targetBusy": "This drive is already in use by the system or another program",

@@ -132,6 +132,7 @@
   "cf.saving": "保存中…",
   "cf.secret": "Secret Access Key",
   "cf.show": "显示",
+  "cf.smbPathHint": "code 与 Code 是同一个位置——SMB 不区分大小写（服务端行为）。要按大小写区分请改用 WebDAV / SFTP。",
   "cf.sysProxy": "走系统代理",
   "cf.sysProxyTip": "挂载与探测都使用系统设置里的代理（控制面板 → Internet 选项）",
   "cf.targetBusy": "这个盘符已被系统或其他程序占用，换一个再保存",

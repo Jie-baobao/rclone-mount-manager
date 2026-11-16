@@ -132,6 +132,7 @@
   "cf.saving": "Enregistrement…",
   "cf.secret": "Secret Access Key",
   "cf.show": "Afficher",
+  "cf.smbPathHint": "code et Code désignent le même emplacement — SMB ne distingue pas la casse (comportement du serveur). Utilisez WebDAV / SFTP si cela compte.",
   "cf.sysProxy": "Utiliser le proxy système",
   "cf.sysProxyTip": "Le montage et la sonde utilisent le proxy défini dans les paramètres système",
   "cf.targetBusy": "Ce lecteur est déjà utilisé par le système ou un autre programme",

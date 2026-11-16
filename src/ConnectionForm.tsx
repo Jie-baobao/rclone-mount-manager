@@ -417,6 +417,7 @@ export default function ConnectionForm({ initial, env, t, onClose, onSaved }: Pr
         <label className="field">
           <span>{t(`pm.${protocol}.pathLabel`)}</span>
           <input className="ctl" value={path} onChange={(e) => setPath(e.target.value)} placeholder={t(`pm.${protocol}.pathPlaceholder`)} />
+          {protocol === "smb" && <span className="field-note">{t("cf.smbPathHint")}</span>}
         </label>
 
         {isS3 && (

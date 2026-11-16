@@ -132,6 +132,7 @@
   "cf.saving": "저장 중…",
   "cf.secret": "Secret Access Key",
   "cf.show": "표시",
+  "cf.smbPathHint": "code와 Code는 같은 위치입니다 — SMB는 대소문자를 구분하지 않습니다(서버 동작). 구분이 필요하면 WebDAV / SFTP를 사용하세요.",
   "cf.sysProxy": "시스템 프록시 사용",
   "cf.sysProxyTip": "마운트와 상태 확인에 시스템에 설정된 프록시를 사용합니다",
   "cf.targetBusy": "이 드라이브는 시스템 또는 다른 프로그램이 사용 중입니다",

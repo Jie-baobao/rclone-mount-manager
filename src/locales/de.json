@@ -132,6 +132,7 @@
   "cf.saving": "Speichern…",
   "cf.secret": "Secret Access Key",
   "cf.show": "Anzeigen",
+  "cf.smbPathHint": "code und Code sind derselbe Ort — SMB unterscheidet nicht zwischen Groß- und Kleinschreibung (Serververhalten). Wenn das zählt: WebDAV / SFTP.",
   "cf.sysProxy": "Systemproxy verwenden",
   "cf.sysProxyTip": "Mounten und Prüfung verwenden den in den Systemeinstellungen konfigurierten Proxy",
   "cf.targetBusy": "Dieses Laufwerk wird bereits vom System oder einem anderen Programm genutzt",

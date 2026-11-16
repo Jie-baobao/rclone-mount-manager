@@ -132,6 +132,7 @@
   "cf.saving": "儲存中…",
   "cf.secret": "Secret Access Key",
   "cf.show": "顯示",
+  "cf.smbPathHint": "code 與 Code 是同一個位置——SMB 不分大小寫（伺服器行為）。要區分大小寫請改用 WebDAV / SFTP。",
   "cf.sysProxy": "走系統代理",
   "cf.sysProxyTip": "掛載與探測都使用系統設定的代理（控制台 → 網際網路選項）",
   "cf.targetBusy": "這個磁碟機代號已被系統或其他程式佔用，換一個再儲存",

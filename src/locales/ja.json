@@ -132,6 +132,7 @@
   "cf.saving": "保存中…",
   "cf.secret": "Secret Access Key",
   "cf.show": "表示",
+  "cf.smbPathHint": "code と Code は同じ場所です — SMB は大文字・小文字を区別しません（サーバー側の仕様）。区別が必要なら WebDAV / SFTP をお使いください。",
   "cf.sysProxy": "システムプロキシを使う",
   "cf.sysProxyTip": "マウントと監視にシステム設定のプロキシを使用します",
   "cf.targetBusy": "このドライブはシステムまたは他のプログラムが使用中です",

@@ -1065,6 +1065,14 @@ input[type="number"].ctl {
   color: var(--muted);
   line-height: 1.4;
 }
+/* 输入框下面那种一行小字说明（目前只有 SMB 路径的「不区分大小写」） */
+.form-grid > label.field > span.field-note {
+  font-size: 10.5px;
+  color: var(--muted);
+  opacity: 0.85;
+  line-height: 1.5;
+  margin-top: 1px;
+}
 
 /* 两列时字段底部对齐，避免「有提示文字的列」比另一列矮一截 */
 .form-grid {
